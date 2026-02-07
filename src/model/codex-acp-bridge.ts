@@ -56,9 +56,8 @@ function extractTextChunks(value: unknown, chunks: string[]): void {
   }
 
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed) {
-      chunks.push(trimmed);
+    if (value.length > 0) {
+      chunks.push(value);
     }
     return;
   }
