@@ -20,6 +20,9 @@ services:
       - .env
     environment:
       - DATA_ROOT=/data
+      - CODEX_HOME=/data/.codex
+      - HOME=/data
+      - NO_COLOR=1
       - LOG_LEVEL=info
       - TELEGRAM_POLL_TIMEOUT_SECONDS=20
     volumes:

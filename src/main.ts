@@ -21,7 +21,14 @@ async function main(): Promise<void> {
   await snapshots.init();
 
   const skills = new SkillDiscovery(`${config.dataRoot}/skills`);
-  const modelBridge = new CodexAcpBridge(config.acpCommand, config.acpArgs, logger);
+  const modelBridge = new CodexAcpBridge(config.acpCommand, config.acpArgs, logger, {
+    cwd: config.dataRoot,
+    env: {
+      CODEX_HOME: Bun.env.CODEX_HOME ?? `${config.dataRoot}/.codex`,
+      HOME: Bun.env.HOME ?? config.dataRoot,
+      NO_COLOR: Bun.env.NO_COLOR ?? "1",
+    },
+  });
 
   const agent = new AgentService({
     allowlist,
