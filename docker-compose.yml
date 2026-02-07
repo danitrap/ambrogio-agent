@@ -1,7 +1,12 @@
 services:
   agent:
-    build: .
-    container_name: personal-agent
+    build:
+      context: .
+      cache_from:
+        - type=local,src=.docker-cache
+      cache_to:
+        - type=local,dest=.docker-cache,mode=max
+    container_name: ambrogio-agent
     restart: unless-stopped
     read_only: true
     tmpfs:

@@ -48,6 +48,7 @@ docker compose up -d --build
 ```
 
 The Docker image builds and installs `codex-acp` from source during `docker compose build`.
+BuildKit cache is enabled in compose and persisted in `.docker-cache`, so later rebuilds are significantly faster.
 
 All writable state is under `./data` on the host, mounted to `/data` in the container.
 
