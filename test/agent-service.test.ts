@@ -90,4 +90,34 @@ describe("AgentService", () => {
     const result = await service.handleMessage(2, "hello");
     expect(result).toBe("Unauthorized user.");
   });
+
+  test("includes short conversation context on subsequent turns", async () => {
+    const seenMessages: string[] = [];
+    const model: ModelBridge = {
+      respond: async (request) => {
+        seenMessages.push(request.message);
+        return { text: "ok", toolCalls: [] };
+      },
+    };
+
+    const service = new AgentService({
+      allowlist: new TelegramAllowlist(1),
+      modelBridge: model,
+      skills: new FakeSkills() as never,
+      fsTools: new FakeFsTools() as never,
+      snapshots: new FakeSnapshots() as never,
+      logger: new Logger("error"),
+    });
+
+    await service.handleMessage(1, "primo messaggio");
+    await service.handleMessage(1, "secondo messaggio");
+
+    expect(seenMessages).toHaveLength(2);
+    expect(seenMessages[0]).toBe("primo messaggio");
+    expect(seenMessages[1]).toContain("Conversation context:");
+    expect(seenMessages[1]).toContain("User: primo messaggio");
+    expect(seenMessages[1]).toContain("Assistant: ok");
+    expect(seenMessages[1]).toContain("Current user request:");
+    expect(seenMessages[1]).toContain("secondo messaggio");
+  });
 });

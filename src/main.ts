@@ -9,12 +9,77 @@ import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
 import { FsTools } from "./tools/fs-tools";
 
+const TYPING_INTERVAL_MS = 4_000;
+const MODEL_TIMEOUT_MS = 60_000;
+
 function previewText(value: string, max = 160): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
   if (normalized.length <= max) {
     return normalized;
   }
   return `${normalized.slice(0, max)}...`;
+}
+
+function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+
+    signal.addEventListener("abort", onAbort);
+  });
+}
+
+async function startTypingLoop(
+  telegram: TelegramAdapter,
+  logger: Logger,
+  chatId: number,
+  updateId: number,
+  userId: number,
+  signal: AbortSignal,
+): Promise<void> {
+  logger.info("typing_started", { updateId, userId, chatId });
+
+  while (!signal.aborted) {
+    try {
+      await telegram.sendTyping(chatId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn("typing_heartbeat_failed", { updateId, userId, chatId, message });
+    }
+
+    await waitOrAbort(TYPING_INTERVAL_MS, signal);
+  }
+
+  logger.info("typing_stopped", { updateId, userId, chatId });
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error("MODEL_TIMEOUT"));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -73,12 +138,34 @@ async function main(): Promise<void> {
         });
 
         let reply: string;
+        const typingController = new AbortController();
+        const typingLoop = startTypingLoop(
+          telegram,
+          logger,
+          update.chatId,
+          update.updateId,
+          update.userId,
+          typingController.signal,
+        );
         try {
-          reply = await agent.handleMessage(update.userId, update.text);
+          reply = await withTimeout(agent.handleMessage(update.userId, update.text), MODEL_TIMEOUT_MS);
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Unknown error";
-          logger.error("message_processing_failed", { message, userId: update.userId });
-          reply = `Error: ${message}`;
+          if (error instanceof Error && error.message === "MODEL_TIMEOUT") {
+            logger.error("request_timed_out", {
+              updateId: update.updateId,
+              userId: update.userId,
+              chatId: update.chatId,
+              timeoutMs: MODEL_TIMEOUT_MS,
+            });
+            reply = "Model backend unavailable right now. Riprova tra poco.";
+          } else {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            logger.error("message_processing_failed", { message, userId: update.userId });
+            reply = `Error: ${message}`;
+          }
+        } finally {
+          typingController.abort();
+          await typingLoop;
         }
 
         const outbound = reply.slice(0, 4000);

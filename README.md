@@ -14,6 +14,7 @@ Personal-only agent wrapper for Telegram with a secure `/data` boundary and Agen
 - Git snapshot created before every write
 - Agent Skills-compatible discovery from `/data/skills/*/SKILL.md`
 - Docker hardening baseline (`read_only`, `cap_drop=ALL`, `no-new-privileges`)
+- Backend-tools-only mode via `codex exec` (no local fallback execution).
 
 ## Local run
 
@@ -31,7 +32,7 @@ cp .env.example .env
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ALLOWED_USER_ID`
 - `ACP_COMMAND` (default: `codex-acp`)
-- `ACP_ARGS` (default: `-a never -s danger-full-access` inside this containerized setup)
+- `ACP_ARGS` (default: `--dangerously-bypass-approvals-and-sandbox -c instructions=acp_fs` inside this containerized setup)
 
 4. Start:
 ```bash
@@ -66,32 +67,11 @@ All writable state is under `./data` on the host, mounted to `/data` in the cont
 
 ## Model bridge contract (current)
 
-The service runs the ACP command as a child process per request and writes one JSON line to stdin:
+The service runs `codex exec` per request and passes the prompt via stdin.
 
-```json
-{
-  "type": "respond",
-  "request": {
-    "message": "user text",
-    "skills": [{"id":"...","name":"...","description":"...","instructions":"..."}],
-    "tools": ["list_files","read_file","write_file","search"]
-  }
-}
-```
-
-Expected stdout (JSON):
-
-```json
-{
-  "text": "assistant response",
-  "toolCalls": [
-    {"tool": "read_file", "args": {"path": "grocery.md"}},
-    {"tool": "write_file", "args": {"path": "grocery.md", "content": "..."}}
-  ]
-}
-```
-
-If stdout is not JSON, it is treated as plain text and no tools are called.
+- `--output-last-message` is used to capture the final assistant message.
+- The bridge strips `<final>...</final>` tags before sending to Telegram.
+- Tool execution is handled inside Codex runtime (`shell`/`apply_patch`), not by host-side tool calls.
 
 ## Tests
 

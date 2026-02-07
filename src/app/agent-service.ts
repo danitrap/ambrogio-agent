@@ -20,6 +20,8 @@ export type AgentDependencies = {
 };
 
 export class AgentService {
+  private readonly historyByUser = new Map<number, Array<{ role: "user" | "assistant"; text: string }>>();
+
   constructor(private readonly deps: AgentDependencies) {}
 
   async handleMessage(userId: number, text: string): Promise<string> {
@@ -32,8 +34,11 @@ export class AgentService {
     const selected = selectSkills(text, availableSkills);
     const hydrated = await Promise.all(selected.map((skill) => this.deps.skills.hydrate(skill)));
 
+    const history = this.historyByUser.get(userId) ?? [];
+    const contextualMessage = formatContextualMessage(history, text);
+
     const modelResponse = await this.deps.modelBridge.respond({
-      message: text,
+      message: contextualMessage,
       skills: hydrated,
     });
 
@@ -43,11 +48,13 @@ export class AgentService {
       operationLogs.push(`${toolCall.tool}: ${stringifyResult(result)}`);
     }
 
-    if (operationLogs.length === 0) {
-      return modelResponse.text || "Done.";
-    }
+    const responseText = operationLogs.length === 0
+      ? (modelResponse.text || "Done.")
+      : [modelResponse.text || "Completed tool operations.", "", ...operationLogs].join("\n");
 
-    return [modelResponse.text || "Completed tool operations.", "", ...operationLogs].join("\n");
+    this.pushHistory(userId, "user", text);
+    this.pushHistory(userId, "assistant", responseText);
+    return responseText;
   }
 
   private async executeToolCall(tool: string, args: Record<string, unknown>, messageText: string): Promise<unknown> {
@@ -91,4 +98,27 @@ export class AgentService {
         throw new Error(`Unsupported tool: ${tool}`);
     }
   }
+
+  private pushHistory(userId: number, role: "user" | "assistant", text: string): void {
+    const history = this.historyByUser.get(userId) ?? [];
+    history.push({ role, text });
+    const maxEntries = 12;
+    if (history.length > maxEntries) {
+      history.splice(0, history.length - maxEntries);
+    }
+    this.historyByUser.set(userId, history);
+  }
+}
+
+function formatContextualMessage(history: Array<{ role: "user" | "assistant"; text: string }>, text: string): string {
+  if (history.length === 0) {
+    return text;
+  }
+
+  const serializedHistory = history
+    .slice(-8)
+    .map((entry) => `${entry.role === "user" ? "User" : "Assistant"}: ${entry.text}`)
+    .join("\n");
+
+  return `Conversation context:\n${serializedHistory}\n\nCurrent user request:\n${text}`;
 }

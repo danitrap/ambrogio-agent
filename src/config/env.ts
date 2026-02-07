@@ -31,7 +31,7 @@ export function loadConfig(): AppConfig {
   const acpArgsRaw = Bun.env.ACP_ARGS;
   const acpArgs = acpArgsRaw
     ? acpArgsRaw.split(" ").map((part) => part.trim()).filter(Boolean)
-    : ["-a", "never", "-s", "danger-full-access"];
+    : ["--dangerously-bypass-approvals-and-sandbox", "-c", "instructions=acp_fs"];
 
   return {
     telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),

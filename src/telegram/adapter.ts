@@ -80,4 +80,21 @@ export class TelegramAdapter {
       throw new Error(`Telegram sendMessage failed: ${response.status}`);
     }
   }
+
+  async sendTyping(chatId: number): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/sendChatAction`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        chat_id: chatId,
+        action: "typing",
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Telegram sendChatAction failed: ${response.status}`);
+    }
+  }
 }
