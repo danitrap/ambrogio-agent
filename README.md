@@ -47,6 +47,8 @@ mkdir -p data
 docker compose up -d --build
 ```
 
+The Docker image builds and installs `codex-acp` from source during `docker compose build`.
+
 All writable state is under `./data` on the host, mounted to `/data` in the container.
 
 ## Model bridge contract (current)
