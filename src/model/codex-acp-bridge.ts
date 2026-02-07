@@ -330,6 +330,17 @@ export class CodexAcpBridge implements ModelBridge {
         };
       }
 
+      const setModeResponse = await rpc.request("session/setMode", {
+        sessionId,
+        modeId: "full-access",
+      });
+      if (setModeResponse.error) {
+        this.logger.warn("acp_set_mode_failed", {
+          sessionId,
+          error: formatRpcError(setModeResponse),
+        });
+      }
+
       const promptResponse = await rpc.request("session/prompt", {
         sessionId,
         prompt: [

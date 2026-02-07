@@ -7,7 +7,7 @@ describe("CodexAcpBridge", () => {
     const command = "sh";
     const args = [
       "-lc",
-      "read _; printf 'info line\\n'; printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"authMethods\":[]}}\\n'; read _; printf '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"s-1\"}}\\n'; read _; printf '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"content\":\"ok from model\"}}}\\n'; printf '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{}}\\n'",
+      "read _; printf 'info line\\n'; printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"authMethods\":[]}}\\n'; read _; printf '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"s-1\"}}\\n'; read _; printf '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{}}\\n'; read _; printf '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"content\":\"ok from model\"}}}\\n'; printf '{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{}}\\n'",
     ];
 
     const bridge = new CodexAcpBridge(command, args, new Logger("error"), { timeoutMs: 1000 });
@@ -36,7 +36,7 @@ describe("CodexAcpBridge", () => {
     const command = "sh";
     const args = [
       "-lc",
-      "read _; printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"authMethods\":[]}}\\n'; read _; printf '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"s-1\"}}\\n'; read _; printf '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"content\":\"Tutto\"}}}\\n'; printf '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"content\":\" \"}}}\\n'; printf '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"content\":\"bene\"}}}\\n'; printf '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{}}\\n'",
+      "read _; printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"authMethods\":[]}}\\n'; read _; printf '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"s-1\"}}\\n'; read _; printf '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{}}\\n'; read _; printf '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"content\":\"Tutto\"}}}\\n'; printf '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"content\":\" \"}}}\\n'; printf '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"content\":\"bene\"}}}\\n'; printf '{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{}}\\n'",
     ];
 
     const bridge = new CodexAcpBridge(command, args, new Logger("error"), { timeoutMs: 1000 });
