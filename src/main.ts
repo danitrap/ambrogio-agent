@@ -9,6 +9,14 @@ import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
 import { FsTools } from "./tools/fs-tools";
 
+function previewText(value: string, max = 160): string {
+  const normalized = value.replaceAll(/\s+/g, " ").trim();
+  if (normalized.length <= max) {
+    return normalized;
+  }
+  return `${normalized.slice(0, max)}...`;
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = new Logger(config.logLevel);
@@ -56,6 +64,13 @@ async function main(): Promise<void> {
       const updates = await telegram.getUpdates(offset, config.telegramPollTimeoutSeconds);
       for (const update of updates) {
         offset = Math.max(offset, update.updateId + 1);
+        logger.info("telegram_message_received", {
+          updateId: update.updateId,
+          userId: update.userId,
+          chatId: update.chatId,
+          textLength: update.text.length,
+          textPreview: previewText(update.text),
+        });
 
         let reply: string;
         try {
@@ -66,7 +81,15 @@ async function main(): Promise<void> {
           reply = `Error: ${message}`;
         }
 
-        await telegram.sendMessage(update.chatId, reply.slice(0, 4000));
+        const outbound = reply.slice(0, 4000);
+        await telegram.sendMessage(update.chatId, outbound);
+        logger.info("telegram_message_sent", {
+          updateId: update.updateId,
+          userId: update.userId,
+          chatId: update.chatId,
+          textLength: outbound.length,
+          textPreview: previewText(outbound),
+        });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
