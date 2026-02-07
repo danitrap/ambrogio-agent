@@ -20,6 +20,10 @@ function previewText(value: string, max = 160): string {
   return `${normalized.slice(0, max)}...`;
 }
 
+function isClearCommand(text: string): boolean {
+  return /^\/clear(?:@\w+)?(?:\s+.*)?$/i.test(text.trim());
+}
+
 function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
     return Promise.resolve();
@@ -136,6 +140,38 @@ async function main(): Promise<void> {
           textLength: update.text.length,
           textPreview: previewText(update.text),
         });
+
+        if (isClearCommand(update.text)) {
+          if (!allowlist.isAllowed(update.userId)) {
+            const outbound = "Unauthorized user.";
+            await telegram.sendMessage(update.chatId, outbound);
+            logger.info("telegram_message_sent", {
+              updateId: update.updateId,
+              userId: update.userId,
+              chatId: update.chatId,
+              textLength: outbound.length,
+              textPreview: previewText(outbound),
+            });
+            continue;
+          }
+
+          agent.clearConversation(update.userId);
+          logger.info("conversation_cleared", {
+            updateId: update.updateId,
+            userId: update.userId,
+            chatId: update.chatId,
+          });
+          const outbound = "Memoria conversazione cancellata.";
+          await telegram.sendMessage(update.chatId, outbound);
+          logger.info("telegram_message_sent", {
+            updateId: update.updateId,
+            userId: update.userId,
+            chatId: update.chatId,
+            textLength: outbound.length,
+            textPreview: previewText(outbound),
+          });
+          continue;
+        }
 
         let reply: string;
         const typingController = new AbortController();

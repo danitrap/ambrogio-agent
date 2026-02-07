@@ -108,6 +108,10 @@ export class AgentService {
     }
     this.historyByUser.set(userId, history);
   }
+
+  clearConversation(userId: number): void {
+    this.historyByUser.delete(userId);
+  }
 }
 
 function formatContextualMessage(history: Array<{ role: "user" | "assistant"; text: string }>, text: string): string {

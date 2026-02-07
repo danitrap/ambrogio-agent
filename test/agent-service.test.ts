@@ -120,4 +120,31 @@ describe("AgentService", () => {
     expect(seenMessages[1]).toContain("Current user request:");
     expect(seenMessages[1]).toContain("secondo messaggio");
   });
+
+  test("clears conversation context for a user", async () => {
+    const seenMessages: string[] = [];
+    const model: ModelBridge = {
+      respond: async (request) => {
+        seenMessages.push(request.message);
+        return { text: "ok", toolCalls: [] };
+      },
+    };
+
+    const service = new AgentService({
+      allowlist: new TelegramAllowlist(1),
+      modelBridge: model,
+      skills: new FakeSkills() as never,
+      fsTools: new FakeFsTools() as never,
+      snapshots: new FakeSnapshots() as never,
+      logger: new Logger("error"),
+    });
+
+    await service.handleMessage(1, "ciao");
+    await service.handleMessage(1, "come va?");
+    service.clearConversation(1);
+    await service.handleMessage(1, "nuova chat");
+
+    expect(seenMessages[1]).toContain("Conversation context:");
+    expect(seenMessages[2]).toBe("nuova chat");
+  });
 });
