@@ -165,7 +165,8 @@ class RpcClient {
     if (this.updateChunks.length === 0) {
       return "";
     }
-    return this.updateChunks.join("\n");
+    // ACP can stream token-sized deltas; joining with newlines creates broken output.
+    return this.updateChunks.join("").replaceAll("\r", "").trim();
   }
 
   request(method: string, params: Record<string, unknown>): Promise<RpcMessage> {
