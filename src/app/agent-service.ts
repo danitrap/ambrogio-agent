@@ -112,6 +112,18 @@ export class AgentService {
   clearConversation(userId: number): void {
     this.historyByUser.delete(userId);
   }
+
+  getConversationStats(userId: number): { entries: number; userTurns: number; assistantTurns: number; hasContext: boolean } {
+    const history = this.historyByUser.get(userId) ?? [];
+    const userTurns = history.filter((entry) => entry.role === "user").length;
+    const assistantTurns = history.length - userTurns;
+    return {
+      entries: history.length,
+      userTurns,
+      assistantTurns,
+      hasContext: history.length > 0,
+    };
+  }
 }
 
 function formatContextualMessage(history: Array<{ role: "user" | "assistant"; text: string }>, text: string): string {

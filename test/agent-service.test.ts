@@ -147,4 +147,29 @@ describe("AgentService", () => {
     expect(seenMessages[1]).toContain("Conversation context:");
     expect(seenMessages[2]).toBe("nuova chat");
   });
+
+  test("reports conversation stats for a user", async () => {
+    const model: ModelBridge = {
+      respond: async () => ({ text: "ok", toolCalls: [] }),
+    };
+
+    const service = new AgentService({
+      allowlist: new TelegramAllowlist(1),
+      modelBridge: model,
+      skills: new FakeSkills() as never,
+      fsTools: new FakeFsTools() as never,
+      snapshots: new FakeSnapshots() as never,
+      logger: new Logger("error"),
+    });
+
+    await service.handleMessage(1, "ciao");
+    await service.handleMessage(1, "come va?");
+
+    expect(service.getConversationStats(1)).toEqual({
+      entries: 4,
+      userTurns: 2,
+      assistantTurns: 2,
+      hasContext: true,
+    });
+  });
 });

@@ -7,6 +7,7 @@ import { CodexAcpBridge } from "./model/codex-acp-bridge";
 import { GitSnapshotManager } from "./snapshots/git";
 import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
+import { parseTelegramCommand } from "./telegram/commands";
 import { FsTools } from "./tools/fs-tools";
 
 const TYPING_INTERVAL_MS = 4_000;
@@ -22,6 +23,62 @@ function previewText(value: string, max = 160): string {
 
 function isClearCommand(text: string): boolean {
   return /^\/clear(?:@\w+)?(?:\s+.*)?$/i.test(text.trim());
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes === 0) {
+    return `${seconds}s`;
+  }
+  return `${minutes}m ${remainingSeconds}s`;
+}
+
+function buildLastLogMessage(summary: ReturnType<CodexAcpBridge["getLastExecutionSummary"]>): string {
+  if (!summary) {
+    return "Nessuna esecuzione codex disponibile ancora.";
+  }
+
+  const lines = [
+    `Command: ${summary.command}`,
+    `Status: ${summary.status}`,
+    `Started: ${summary.startedAt}`,
+    `Prompt chars: ${summary.promptLength}`,
+  ];
+
+  if (typeof summary.durationMs === "number") {
+    lines.push(`Duration: ${formatDuration(summary.durationMs)}`);
+  }
+  if (typeof summary.exitCode === "number") {
+    lines.push(`Exit code: ${summary.exitCode}`);
+  }
+  if (typeof summary.stdoutLength === "number") {
+    lines.push(`Stdout chars: ${summary.stdoutLength}`);
+  }
+  if (typeof summary.stderrLength === "number") {
+    lines.push(`Stderr chars: ${summary.stderrLength}`);
+  }
+  if (typeof summary.outputLength === "number") {
+    lines.push(`Output chars: ${summary.outputLength}`);
+  }
+  if (summary.stdoutPreview) {
+    lines.push(`Stdout preview: ${summary.stdoutPreview}`);
+  }
+  if (summary.stderrPreview) {
+    lines.push(`Stderr preview: ${summary.stderrPreview}`);
+  }
+  if (summary.outputPreview) {
+    lines.push(`Output preview: ${summary.outputPreview}`);
+  }
+  if (summary.errorMessage) {
+    lines.push(`Error: ${summary.errorMessage}`);
+  }
+
+  return lines.join("\n");
 }
 
 function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
@@ -128,6 +185,10 @@ async function main(): Promise<void> {
   });
 
   let offset = 0;
+  const startedAtMs = Date.now();
+  let handledMessages = 0;
+  let failedMessages = 0;
+  const lastPromptByUser = new Map<number, string>();
   while (true) {
     try {
       const updates = await telegram.getUpdates(offset, config.telegramPollTimeoutSeconds);
@@ -140,6 +201,141 @@ async function main(): Promise<void> {
           textLength: update.text.length,
           textPreview: previewText(update.text),
         });
+
+        const command = parseTelegramCommand(update.text);
+        if (command) {
+          const sendCommandReply = async (outbound: string): Promise<void> => {
+            await telegram.sendMessage(update.chatId, outbound.slice(0, 4000));
+            logger.info("telegram_message_sent", {
+              updateId: update.updateId,
+              userId: update.userId,
+              chatId: update.chatId,
+              textLength: outbound.length,
+              textPreview: previewText(outbound),
+              command: command.name,
+            });
+          };
+
+          if (!allowlist.isAllowed(update.userId)) {
+            await sendCommandReply("Unauthorized user.");
+            continue;
+          }
+
+          switch (command.name) {
+            case "help": {
+              await sendCommandReply(
+                [
+                  "Comandi disponibili:",
+                  "/help - mostra questo aiuto",
+                  "/status - stato runtime agente",
+                  "/lastlog - ultimo riepilogo codex exec",
+                  "/retry - riesegue l'ultimo prompt utente",
+                  "/memory - stato memoria conversazione",
+                  "/skills - lista skills disponibili",
+                  "/clear - cancella memoria conversazione",
+                ].join("\n"),
+              );
+              continue;
+            }
+            case "status": {
+              const uptime = formatDuration(Date.now() - startedAtMs);
+              const summary = modelBridge.getLastExecutionSummary();
+              const lines = [
+                "Agent status:",
+                `Uptime: ${uptime}`,
+                `Handled messages: ${handledMessages}`,
+                `Failed messages: ${failedMessages}`,
+                `Backend command: ${config.acpCommand}`,
+                `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
+              ];
+              await sendCommandReply(lines.join("\n"));
+              continue;
+            }
+            case "lastlog": {
+              await sendCommandReply(buildLastLogMessage(modelBridge.getLastExecutionSummary()));
+              continue;
+            }
+            case "memory": {
+              const stats = agent.getConversationStats(update.userId);
+              const lines = [
+                "Conversation memory:",
+                `Entries: ${stats.entries}`,
+                `User turns: ${stats.userTurns}`,
+                `Assistant turns: ${stats.assistantTurns}`,
+                `Has context: ${stats.hasContext ? "yes" : "no"}`,
+              ];
+              await sendCommandReply(lines.join("\n"));
+              continue;
+            }
+            case "skills": {
+              const discovered = await skills.discover();
+              if (discovered.length === 0) {
+                await sendCommandReply("Nessuna skill disponibile in /data/skills.");
+                continue;
+              }
+
+              const lines = [
+                "Skills disponibili:",
+                ...discovered.map((skill, index) => {
+                  const description = skill.description.replaceAll(/\s+/g, " ").trim();
+                  return `${index + 1}. ${skill.id} - ${description}`;
+                }),
+              ];
+              await sendCommandReply(lines.join("\n"));
+              continue;
+            }
+            case "retry": {
+              const lastPrompt = lastPromptByUser.get(update.userId);
+              if (!lastPrompt) {
+                await sendCommandReply("Nessun prompt precedente da rieseguire.");
+                continue;
+              }
+
+              let reply: string;
+              const typingController = new AbortController();
+              const typingLoop = startTypingLoop(
+                telegram,
+                logger,
+                update.chatId,
+                update.updateId,
+                update.userId,
+                typingController.signal,
+              );
+              try {
+                reply = await withTimeout(agent.handleMessage(update.userId, lastPrompt), MODEL_TIMEOUT_MS);
+                handledMessages += 1;
+              } catch (error) {
+                failedMessages += 1;
+                if (error instanceof Error && error.message === "MODEL_TIMEOUT") {
+                  logger.error("request_timed_out", {
+                    updateId: update.updateId,
+                    userId: update.userId,
+                    chatId: update.chatId,
+                    timeoutMs: MODEL_TIMEOUT_MS,
+                    command: "retry",
+                  });
+                  reply = "Model backend unavailable right now. Riprova tra poco.";
+                } else {
+                  const message = error instanceof Error ? error.message : "Unknown error";
+                  logger.error("message_processing_failed", { message, userId: update.userId, command: "retry" });
+                  reply = `Error: ${message}`;
+                }
+              } finally {
+                typingController.abort();
+                await typingLoop;
+              }
+
+              await sendCommandReply(reply);
+              continue;
+            }
+            case "clear":
+              break;
+            default: {
+              await sendCommandReply(`Comando non riconosciuto: /${command.name}. Usa /help.`);
+              continue;
+            }
+          }
+        }
 
         if (isClearCommand(update.text)) {
           if (!allowlist.isAllowed(update.userId)) {
@@ -185,7 +381,10 @@ async function main(): Promise<void> {
         );
         try {
           reply = await withTimeout(agent.handleMessage(update.userId, update.text), MODEL_TIMEOUT_MS);
+          handledMessages += 1;
+          lastPromptByUser.set(update.userId, update.text);
         } catch (error) {
+          failedMessages += 1;
           if (error instanceof Error && error.message === "MODEL_TIMEOUT") {
             logger.error("request_timed_out", {
               updateId: update.updateId,
