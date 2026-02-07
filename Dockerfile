@@ -14,7 +14,8 @@ FROM oven/bun:1.3.6-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git nodejs npm
+RUN npm install -g @openai/codex
 COPY --from=acp-builder /build/codex-acp/target/release/codex-acp /usr/local/bin/codex-acp
 
 COPY package.json bun.lock tsconfig.json ./
