@@ -51,10 +51,6 @@ function parseJsonFromLine(line: string): RpcMessage | null {
 }
 
 function extractTextChunks(value: unknown, chunks: string[]): void {
-  if (chunks.length >= 30) {
-    return;
-  }
-
   if (typeof value === "string") {
     if (value.length > 0) {
       chunks.push(value);
@@ -65,9 +61,6 @@ function extractTextChunks(value: unknown, chunks: string[]): void {
   if (Array.isArray(value)) {
     for (const item of value) {
       extractTextChunks(item, chunks);
-      if (chunks.length >= 30) {
-        return;
-      }
     }
     return;
   }
@@ -79,9 +72,6 @@ function extractTextChunks(value: unknown, chunks: string[]): void {
         extractTextChunks(item, chunks);
       } else if (key === "update" || key === "prompt" || key === "params") {
         extractTextChunks(item, chunks);
-      }
-      if (chunks.length >= 30) {
-        return;
       }
     }
   }
@@ -137,6 +127,10 @@ class RpcClient {
   private handleLine(line: string): void {
     const message = parseJsonFromLine(line);
     if (!message) {
+      const cleaned = stripAnsi(line).trim();
+      if (cleaned.length > 0) {
+        this.logger.info("acp_stdout_line", { line: cleaned });
+      }
       return;
     }
 
@@ -219,16 +213,47 @@ function formatRpcError(response: RpcMessage): string {
   return `${message}: ${typeof data === "string" ? data : JSON.stringify(data)}`;
 }
 
+function extractFinalAnswer(updatesText: string): string {
+  const tagged = updatesText.match(/<final>([\s\S]*?)<\/final>/i);
+  if (tagged && tagged[1]) {
+    return tagged[1].trim();
+  }
+
+  const openTagIndex = updatesText.toLowerCase().lastIndexOf("<final>");
+  if (openTagIndex >= 0) {
+    return updatesText.slice(openTagIndex + "<final>".length).trim();
+  }
+
+  const paragraphs = updatesText
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (paragraphs.length === 0) {
+    return "";
+  }
+
+  // Fallback: if no explicit tag, prefer the last paragraph.
+  return paragraphs[paragraphs.length - 1] ?? "";
+}
+
 function buildPromptText(request: ModelRequest): string {
+  const responseContract =
+    "Important response rules:\n" +
+    "- Reply with the final user-facing answer only.\n" +
+    "- Do not include planning/debug/internal reasoning.\n" +
+    "- Use available tools when useful, then report the concrete result.\n" +
+    "- Keep the answer concise and actionable.\n" +
+    "- Wrap only your final answer inside <final>...</final> tags.";
+
   if (request.skills.length === 0) {
-    return request.message;
+    return `${responseContract}\n\nUser request:\n${request.message}`;
   }
 
   const skillSection = request.skills
     .map((skill) => `# Skill: ${skill.name}\n${skill.instructions}`)
     .join("\n\n");
 
-  return `${skillSection}\n\nUser request:\n${request.message}`;
+  return `${responseContract}\n\n${skillSection}\n\nUser request:\n${request.message}`;
 }
 
 export class CodexAcpBridge implements ModelBridge {
@@ -330,17 +355,6 @@ export class CodexAcpBridge implements ModelBridge {
         };
       }
 
-      const setModeResponse = await rpc.request("session/setMode", {
-        sessionId,
-        modeId: "full-access",
-      });
-      if (setModeResponse.error) {
-        this.logger.warn("acp_set_mode_failed", {
-          sessionId,
-          error: formatRpcError(setModeResponse),
-        });
-      }
-
       const promptResponse = await rpc.request("session/prompt", {
         sessionId,
         prompt: [
@@ -355,9 +369,17 @@ export class CodexAcpBridge implements ModelBridge {
         return { text: `ACP prompt failed: ${formatRpcError(promptResponse)}`, toolCalls: [] };
       }
 
-      const textFromUpdates = rpc.getUpdatesText();
+      const updatesText = rpc.getUpdatesText();
+      if (updatesText) {
+        this.logger.info("acp_reasoning_trace", {
+          sessionId,
+          textLength: updatesText.length,
+          textPreview: updatesText.slice(0, 2000),
+        });
+      }
+      const finalText = extractFinalAnswer(updatesText);
       return {
-        text: textFromUpdates || "Done.",
+        text: finalText || "Done.",
         toolCalls: [],
       };
     } catch (error) {

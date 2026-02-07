@@ -28,13 +28,17 @@ export type AppConfig = {
 
 export function loadConfig(): AppConfig {
   const logLevel = (Bun.env.LOG_LEVEL ?? "info") as LogLevel;
+  const acpArgsRaw = Bun.env.ACP_ARGS;
+  const acpArgs = acpArgsRaw
+    ? acpArgsRaw.split(" ").map((part) => part.trim()).filter(Boolean)
+    : ["-a", "never", "-s", "danger-full-access"];
 
   return {
     telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),
     telegramAllowedUserId: parseNumber(requireEnv("TELEGRAM_ALLOWED_USER_ID"), "TELEGRAM_ALLOWED_USER_ID"),
     dataRoot: Bun.env.DATA_ROOT ?? "/data",
     acpCommand: Bun.env.ACP_COMMAND ?? "codex-acp",
-    acpArgs: (Bun.env.ACP_ARGS ?? "").split(" ").map((part) => part.trim()).filter(Boolean),
+    acpArgs,
     logLevel,
     telegramPollTimeoutSeconds: parseNumber(Bun.env.TELEGRAM_POLL_TIMEOUT_SECONDS ?? "20", "TELEGRAM_POLL_TIMEOUT_SECONDS"),
   };

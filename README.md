@@ -31,7 +31,7 @@ cp .env.example .env
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ALLOWED_USER_ID`
 - `ACP_COMMAND` (default: `codex-acp`)
-- `ACP_ARGS` (optional)
+- `ACP_ARGS` (default: `-a never -s danger-full-access` inside this containerized setup)
 
 4. Start:
 ```bash
