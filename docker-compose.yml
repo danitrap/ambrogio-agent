@@ -1,0 +1,26 @@
+services:
+  agent:
+    build: .
+    container_name: personal-agent
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    user: "1000:1000"
+    env_file:
+      - .env
+    environment:
+      - DATA_ROOT=/data
+      - LOG_LEVEL=info
+      - TELEGRAM_POLL_TIMEOUT_SECONDS=20
+    volumes:
+      - ./data:/data:rw
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M

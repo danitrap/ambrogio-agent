@@ -1,0 +1,15 @@
+{
+  "name": "agent",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run src/main.ts",
+    "start": "bun run src/main.ts",
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.2"
+  }
+}
