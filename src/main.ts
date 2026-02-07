@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import { TelegramAllowlist } from "./auth/allowlist";
 import { AgentService } from "./app/agent-service";
 import { loadConfig } from "./config/env";
@@ -11,6 +12,11 @@ import { FsTools } from "./tools/fs-tools";
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = new Logger(config.logLevel);
+  const codexHome = Bun.env.CODEX_HOME ?? `${config.dataRoot}/.codex`;
+  const homeDir = Bun.env.HOME ?? config.dataRoot;
+
+  await mkdir(homeDir, { recursive: true });
+  await mkdir(codexHome, { recursive: true });
 
   const telegram = new TelegramAdapter(config.telegramBotToken);
   const allowlist = new TelegramAllowlist(config.telegramAllowedUserId);
@@ -24,8 +30,8 @@ async function main(): Promise<void> {
   const modelBridge = new CodexAcpBridge(config.acpCommand, config.acpArgs, logger, {
     cwd: config.dataRoot,
     env: {
-      CODEX_HOME: Bun.env.CODEX_HOME ?? `${config.dataRoot}/.codex`,
-      HOME: Bun.env.HOME ?? config.dataRoot,
+      CODEX_HOME: codexHome,
+      HOME: homeDir,
       NO_COLOR: Bun.env.NO_COLOR ?? "1",
     },
   });
