@@ -51,6 +51,17 @@ The Docker image builds and installs `codex-acp` from source during `docker comp
 The `codex` CLI is installed via npm (`@openai/codex`), so ChatGPT login is available without building Codex from source.
 BuildKit cache is enabled in compose and persisted in `.docker-cache`, so later rebuilds are significantly faster.
 
+## ChatGPT login (device auth)
+
+When running in Docker, use device auth to avoid localhost callback issues:
+
+```bash
+docker exec -it ambrogio-agent sh -lc 'HOME=/data CODEX_HOME=/data/.codex codex login --device-auth'
+docker compose restart agent
+```
+
+Auth data is persisted in the mounted `./data/.codex` directory.
+
 All writable state is under `./data` on the host, mounted to `/data` in the container.
 
 ## Model bridge contract (current)
