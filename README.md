@@ -5,6 +5,7 @@ Personal-only agent wrapper for Telegram with a secure `/data` boundary and Agen
 ## Features (v1)
 
 - Telegram long polling input
+- Telegram vocal message support with transcription (`gpt-4o-mini-transcribe`)
 - Single-user allowlist (`TELEGRAM_ALLOWED_USER_ID`)
 - File tools scoped to `/data` only:
   - `list_files`
@@ -31,6 +32,7 @@ cp .env.example .env
 3. Fill `.env` values:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ALLOWED_USER_ID`
+- `OPENAI_API_KEY`
 - `ACP_COMMAND` (default: `codex-acp`)
 - `ACP_ARGS` (default: `--dangerously-bypass-approvals-and-sandbox -c instructions=acp_fs` inside this containerized setup)
 

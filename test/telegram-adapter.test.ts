@@ -8,6 +8,72 @@ afterEach(() => {
 });
 
 describe("TelegramAdapter", () => {
+  test("parses voice messages from updates", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      ok: true,
+      result: [
+        {
+          update_id: 11,
+          message: {
+            from: { id: 42 },
+            chat: { id: 77 },
+            voice: {
+              file_id: "voice-file-id",
+              duration: 5,
+              mime_type: "audio/ogg",
+            },
+          },
+        },
+      ],
+    }), { status: 200 })) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter("token");
+    const updates = await adapter.getUpdates(0, 10);
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toEqual({
+      updateId: 11,
+      chatId: 77,
+      userId: 42,
+      text: null,
+      voiceFileId: "voice-file-id",
+      voiceMimeType: "audio/ogg",
+    });
+  });
+
+  test("downloads telegram file by file id", async () => {
+    const calls: Array<{ url: string; body: string }> = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        body: String(init?.body ?? ""),
+      });
+
+      if (String(input).includes("/getFile")) {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: { file_path: "voice/file.oga" },
+        }), { status: 200 });
+      }
+
+      return new Response("audio", {
+        status: 200,
+        headers: { "content-type": "audio/ogg" },
+      });
+    }) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter("token");
+    const result = await adapter.downloadFileById("voice-file-id");
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.url).toContain("/getFile");
+    expect(calls[0]?.body).toContain('"file_id":"voice-file-id"');
+    expect(calls[1]?.url).toContain("/file/bottoken/voice/file.oga");
+    expect(result.mimeType).toBe("audio/ogg");
+    expect(result.fileName).toBe("file.oga");
+    expect(result.fileBlob.size).toBe(5);
+  });
+
   test("sends typing chat action", async () => {
     const calls: Array<{ url: string; body: string }> = [];
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {

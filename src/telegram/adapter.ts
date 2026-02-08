@@ -2,14 +2,24 @@ export type TelegramMessage = {
   updateId: number;
   chatId: number;
   userId: number;
-  text: string;
+  text: string | null;
+  voiceFileId: string | null;
+  voiceMimeType: string | null;
+};
+
+export type TelegramDownload = {
+  fileBlob: Blob;
+  fileName: string;
+  mimeType: string | null;
 };
 
 export class TelegramAdapter {
   private readonly baseUrl: string;
+  private readonly fileBaseUrl: string;
 
   constructor(private readonly botToken: string) {
     this.baseUrl = `https://api.telegram.org/bot${botToken}`;
+    this.fileBaseUrl = `https://api.telegram.org/file/bot${botToken}`;
   }
 
   async getUpdates(offset: number, timeoutSeconds: number): Promise<TelegramMessage[]> {
@@ -35,6 +45,10 @@ export class TelegramAdapter {
         update_id: number;
         message?: {
           text?: string;
+          voice?: {
+            file_id?: string;
+            mime_type?: string;
+          };
           from?: { id?: number };
           chat?: { id?: number };
         };
@@ -48,9 +62,14 @@ export class TelegramAdapter {
     return payload.result
       .map((item) => {
         const text = item.message?.text;
+        const voiceFileId = item.message?.voice?.file_id;
+        const voiceMimeType = item.message?.voice?.mime_type;
         const userId = item.message?.from?.id;
         const chatId = item.message?.chat?.id;
-        if (typeof text !== "string" || typeof userId !== "number" || typeof chatId !== "number") {
+        const hasText = typeof text === "string";
+        const hasVoice = typeof voiceFileId === "string";
+
+        if ((!hasText && !hasVoice) || typeof userId !== "number" || typeof chatId !== "number") {
           return null;
         }
 
@@ -58,10 +77,55 @@ export class TelegramAdapter {
           updateId: item.update_id,
           chatId,
           userId,
-          text,
+          text: hasText ? text : null,
+          voiceFileId: hasVoice ? voiceFileId : null,
+          voiceMimeType: typeof voiceMimeType === "string" ? voiceMimeType : null,
         } satisfies TelegramMessage;
       })
       .filter((message): message is TelegramMessage => message !== null);
+  }
+
+  async downloadFileById(fileId: string): Promise<TelegramDownload> {
+    const getFileResponse = await fetch(`${this.baseUrl}/getFile`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        file_id: fileId,
+      }),
+    });
+
+    if (!getFileResponse.ok) {
+      throw new Error(`Telegram getFile failed: ${getFileResponse.status}`);
+    }
+
+    const payload = (await getFileResponse.json()) as {
+      ok: boolean;
+      result?: {
+        file_path?: string;
+      };
+    };
+
+    const filePath = payload.result?.file_path;
+    if (!payload.ok || typeof filePath !== "string" || filePath.length === 0) {
+      throw new Error("Telegram getFile returned invalid file path");
+    }
+
+    const fileResponse = await fetch(`${this.fileBaseUrl}/${filePath}`);
+    if (!fileResponse.ok) {
+      throw new Error(`Telegram file download failed: ${fileResponse.status}`);
+    }
+
+    const fileBlob = await fileResponse.blob();
+    const segments = filePath.split("/");
+    const fileName = segments[segments.length - 1] ?? "voice.ogg";
+    const mimeType = fileResponse.headers.get("content-type");
+    return {
+      fileBlob,
+      fileName,
+      mimeType,
+    };
   }
 
   async sendMessage(chatId: number, text: string): Promise<void> {

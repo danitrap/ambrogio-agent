@@ -19,6 +19,7 @@ function parseNumber(value: string, name: string): number {
 export type AppConfig = {
   telegramBotToken: string;
   telegramAllowedUserId: number;
+  openaiApiKey: string;
   dataRoot: string;
   acpCommand: string;
   acpArgs: string[];
@@ -36,6 +37,7 @@ export function loadConfig(): AppConfig {
   return {
     telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),
     telegramAllowedUserId: parseNumber(requireEnv("TELEGRAM_ALLOWED_USER_ID"), "TELEGRAM_ALLOWED_USER_ID"),
+    openaiApiKey: requireEnv("OPENAI_API_KEY"),
     dataRoot: Bun.env.DATA_ROOT ?? "/data",
     acpCommand: Bun.env.ACP_COMMAND ?? "codex-acp",
     acpArgs,

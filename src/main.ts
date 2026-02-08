@@ -4,6 +4,7 @@ import { AgentService } from "./app/agent-service";
 import { loadConfig } from "./config/env";
 import { Logger } from "./logging/audit";
 import { CodexAcpBridge } from "./model/codex-acp-bridge";
+import { OpenAiTranscriber } from "./model/openai-transcriber";
 import { GitSnapshotManager } from "./snapshots/git";
 import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
@@ -173,6 +174,7 @@ async function main(): Promise<void> {
       NO_COLOR: Bun.env.NO_COLOR ?? "1",
     },
   });
+  const transcriber = new OpenAiTranscriber(config.openaiApiKey);
 
   const agent = new AgentService({
     allowlist,
@@ -202,11 +204,12 @@ async function main(): Promise<void> {
           updateId: update.updateId,
           userId: update.userId,
           chatId: update.chatId,
-          textLength: update.text.length,
-          textPreview: previewText(update.text),
+          textLength: update.text?.length ?? 0,
+          textPreview: update.text ? previewText(update.text) : undefined,
+          hasVoice: update.voiceFileId !== null,
         });
 
-        const command = parseTelegramCommand(update.text);
+        const command = update.text ? parseTelegramCommand(update.text) : null;
         if (command) {
           const sendCommandReply = async (outbound: string): Promise<void> => {
             await telegram.sendMessage(update.chatId, outbound.slice(0, 4000));
@@ -341,7 +344,7 @@ async function main(): Promise<void> {
           }
         }
 
-        if (isClearCommand(update.text)) {
+        if (update.text && isClearCommand(update.text)) {
           if (!allowlist.isAllowed(update.userId)) {
             const outbound = "Unauthorized user.";
             await telegram.sendMessage(update.chatId, outbound);
@@ -374,6 +377,21 @@ async function main(): Promise<void> {
         }
 
         let reply: string;
+        let promptText = update.text;
+
+        if (!promptText && update.voiceFileId && !allowlist.isAllowed(update.userId)) {
+          const outbound = "Unauthorized user.";
+          await telegram.sendMessage(update.chatId, outbound);
+          logger.info("telegram_message_sent", {
+            updateId: update.updateId,
+            userId: update.userId,
+            chatId: update.chatId,
+            textLength: outbound.length,
+            textPreview: previewText(outbound),
+          });
+          continue;
+        }
+
         const typingController = new AbortController();
         const typingLoop = startTypingLoop(
           telegram,
@@ -384,9 +402,25 @@ async function main(): Promise<void> {
           typingController.signal,
         );
         try {
-          reply = await withTimeout(agent.handleMessage(update.userId, update.text, String(update.updateId)), MODEL_TIMEOUT_MS);
-          handledMessages += 1;
-          lastPromptByUser.set(update.userId, update.text);
+          if (!promptText && update.voiceFileId) {
+            const audio = await telegram.downloadFileById(update.voiceFileId);
+            promptText = await transcriber.transcribe(audio.fileBlob, audio.fileName, audio.mimeType ?? update.voiceMimeType);
+            logger.info("telegram_voice_transcribed", {
+              updateId: update.updateId,
+              userId: update.userId,
+              chatId: update.chatId,
+              transcriptionLength: promptText.length,
+              transcriptionPreview: previewText(promptText),
+            });
+          }
+
+          if (!promptText) {
+            reply = "Posso gestire solo messaggi testuali o vocali.";
+          } else {
+            reply = await withTimeout(agent.handleMessage(update.userId, promptText, String(update.updateId)), MODEL_TIMEOUT_MS);
+            handledMessages += 1;
+            lastPromptByUser.set(update.userId, promptText);
+          }
         } catch (error) {
           failedMessages += 1;
           if (error instanceof Error && error.message === "MODEL_TIMEOUT") {
