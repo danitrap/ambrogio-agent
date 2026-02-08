@@ -5,10 +5,10 @@ import { TelegramAllowlist } from "./auth/allowlist";
 import { AgentService } from "./app/agent-service";
 import { loadConfig } from "./config/env";
 import { Logger } from "./logging/audit";
+import { correlationFields } from "./logging/correlation";
 import { ExecBridge } from "./model/exec-bridge";
 import { ElevenLabsTts } from "./model/elevenlabs-tts";
 import { OpenAiTranscriber } from "./model/openai-transcriber";
-import { runAgentRequestWithTimeout } from "./runtime/agent-request";
 import { handleTelegramCommand } from "./runtime/command-handlers";
 import { createHeartbeatRunner } from "./runtime/heartbeat-runner";
 import { parseQuietHours } from "./runtime/heartbeat-quiet-hours";
@@ -31,6 +31,7 @@ const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
 const GENERATED_SCANNED_PDFS_RELATIVE_DIR = "generated/scanned-pdfs";
 const MAX_RECENT_TELEGRAM_MESSAGES = 50;
 const HEARTBEAT_ALERT_DEDUP_WINDOW_MS = 4 * 60 * 60 * 1000;
+type PendingBackgroundTask = ReturnType<StateStore["getPendingBackgroundTasks"]>[number];
 
 function previewText(value: string, max = 160): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
@@ -161,33 +162,46 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout?
   }
 }
 
-async function runWithTypingAndTimeout<T>(params: {
+function startOperationWithTyping<T>(params: {
   telegram: TelegramAdapter;
   logger: Logger;
   chatId: number;
   updateId: number;
   userId: number;
-  timeoutMs: number;
   operation: (signal: AbortSignal) => Promise<T>;
-}): Promise<T> {
-  const controller = new AbortController();
+}): {
+  operationPromise: Promise<T>;
+  stopTyping: () => Promise<void>;
+} {
+  const typingController = new AbortController();
+  const operationController = new AbortController();
   const typingLoop = startTypingLoop(
     params.telegram,
     params.logger,
     params.chatId,
     params.updateId,
     params.userId,
-    controller.signal,
+    typingController.signal,
   );
+  let typingStopped = false;
 
-  try {
-    return await withTimeout(params.operation(controller.signal), params.timeoutMs, () => {
-      controller.abort();
-    });
-  } finally {
-    controller.abort();
+  const stopTyping = async (): Promise<void> => {
+    if (typingStopped) {
+      return;
+    }
+    typingStopped = true;
+    typingController.abort();
     await typingLoop;
-  }
+  };
+
+  const operationPromise = params.operation(operationController.signal).finally(async () => {
+    await stopTyping();
+  });
+
+  return {
+    operationPromise,
+    stopTyping,
+  };
 }
 
 async function main(): Promise<void> {
@@ -330,6 +344,77 @@ async function main(): Promise<void> {
     }
   };
 
+  const backgroundDeliveryInFlight = new Set<string>();
+
+  const deliverBackgroundTask = async (task: PendingBackgroundTask, trigger: "completion" | "heartbeat"): Promise<boolean> => {
+    if (!task.deliveryText) {
+      logger.warn("background_task_missing_delivery_text", {
+        taskId: task.taskId,
+        status: task.status,
+        trigger,
+      });
+      return false;
+    }
+    if (backgroundDeliveryInFlight.has(task.taskId)) {
+      return false;
+    }
+
+    backgroundDeliveryInFlight.add(task.taskId);
+    try {
+      await dispatchAssistantReply({
+        telegram,
+        logger,
+        tts,
+        rootRealPath: dataRootRealPath,
+        update: {
+          updateId: task.updateId,
+          userId: task.userId,
+          chatId: task.chatId,
+        },
+        rawReply: task.deliveryText,
+        maxTelegramDocumentBytes: MAX_TELEGRAM_DOCUMENT_BYTES,
+        generatedScannedPdfsRelativeDir: GENERATED_SCANNED_PDFS_RELATIVE_DIR,
+        logContext: { command: task.command ?? "background" },
+        onTextSent: async (text) => {
+          await recordRecentTelegramEntry(
+            "assistant",
+            `background task ${task.taskId}: ${previewText(text, 120)}`,
+          );
+        },
+      });
+      stateStore.markBackgroundTaskDelivered(task.taskId);
+      logger.info("background_task_delivered", {
+        taskId: task.taskId,
+        trigger,
+        status: task.status,
+        chatId: task.chatId,
+      });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn("background_task_delivery_failed", {
+        taskId: task.taskId,
+        trigger,
+        status: task.status,
+        chatId: task.chatId,
+        message,
+      });
+      return false;
+    } finally {
+      backgroundDeliveryInFlight.delete(task.taskId);
+    }
+  };
+
+  const flushPendingBackgroundTasks = async (): Promise<void> => {
+    const pending = stateStore.getPendingBackgroundTasks(20);
+    if (pending.length === 0) {
+      return;
+    }
+    for (const task of pending) {
+      await deliverBackgroundTask(task, "heartbeat");
+    }
+  };
+
   const runHeartbeatPromptWithTimeout = async (prompt: string, requestId: string): Promise<string> => {
     const controller = new AbortController();
     const result = await withTimeout(
@@ -396,6 +481,7 @@ async function main(): Promise<void> {
         .map((entry, index) => `${index + 1}. ${entry.role}: ${entry.text}`);
     const todoPath = path.join(config.dataRoot, "TODO.md");
     const todoOpenItems = await readTodoSnapshot();
+    const pendingBackgroundTasks = stateStore.countPendingBackgroundTasks();
 
     return [
       "Runtime status:",
@@ -407,6 +493,7 @@ async function main(): Promise<void> {
       `Uptime: ${formatDuration(nowMs - startedAtMs)}`,
       `Handled messages: ${handledMessages}`,
       `Failed messages: ${failedMessages}`,
+      `Background tasks pending delivery: ${pendingBackgroundTasks}`,
       `Heartbeat in flight: ${heartbeatState.heartbeatInFlight ? "yes" : "no"}`,
       `Heartbeat last run: ${heartbeatState.heartbeatLastRunAt ?? "n/a"}`,
       `Heartbeat last result: ${heartbeatState.heartbeatLastResult}`,
@@ -448,8 +535,12 @@ async function main(): Promise<void> {
   heartbeatStateResolver = heartbeatRunner.getHeartbeatState;
 
   setInterval(() => {
-    void heartbeatRunner.runScheduledHeartbeat("timer");
+    void (async () => {
+      await flushPendingBackgroundTasks();
+      await heartbeatRunner.runScheduledHeartbeat("timer");
+    })();
   }, HEARTBEAT_INTERVAL_MS);
+  void flushPendingBackgroundTasks();
   logger.info("heartbeat_loop_started", {
     intervalMs: HEARTBEAT_INTERVAL_MS,
     filePath: `${config.dataRoot}/${HEARTBEAT_FILE_NAME}`,
@@ -502,22 +593,109 @@ async function main(): Promise<void> {
             },
           });
         };
-        const executePrompt = async (prompt: string, commandName: string) => {
-          const result = await runAgentRequestWithTimeout({
+        const runOperationWithSoftTimeout = async (params: {
+          commandName?: string;
+          requestPreview: string;
+          operation: (signal: AbortSignal) => Promise<string>;
+        }): Promise<{ reply: string; ok: boolean }> => {
+          const tracked = startOperationWithTyping({
+            telegram,
             logger,
-            update,
-            timeoutMs: MODEL_TIMEOUT_MS,
-            command: commandName,
-            operation: () =>
-              runWithTypingAndTimeout({
-                telegram,
-                logger,
-                chatId: update.chatId,
+            chatId: update.chatId,
+            updateId: update.updateId,
+            userId: update.userId,
+            operation: params.operation,
+          });
+
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          const settledPromise = tracked.operationPromise
+            .then((reply) => ({ kind: "ok" as const, reply }))
+            .catch((error) => ({ kind: "error" as const, error }));
+          const first = await Promise.race([
+            settledPromise,
+            new Promise<{ kind: "timeout" }>((resolve) => {
+              timeout = setTimeout(() => resolve({ kind: "timeout" }), MODEL_TIMEOUT_MS);
+            }),
+          ]);
+
+          if (timeout) {
+            clearTimeout(timeout);
+          }
+
+          if (first.kind === "ok") {
+            return { reply: first.reply, ok: true };
+          }
+
+          if (first.kind === "error") {
+            const message = first.error instanceof Error ? first.error.message : "Unknown error";
+            logger.error("message_processing_failed", {
+              message,
+              ...correlationFields({
                 updateId: update.updateId,
                 userId: update.userId,
-                timeoutMs: MODEL_TIMEOUT_MS,
-                operation: (signal) => agent.handleMessage(update.userId, prompt, String(update.updateId), signal),
+                chatId: update.chatId,
+                command: params.commandName,
               }),
+            });
+            return { reply: `Error: ${message}`, ok: false };
+          }
+
+          await tracked.stopTyping();
+          const taskId = `bg-${update.updateId}-${Date.now()}`;
+          logger.error("request_timed_out", {
+            ...correlationFields({
+              updateId: update.updateId,
+              userId: update.userId,
+              chatId: update.chatId,
+              command: params.commandName,
+            }),
+            timeoutMs: MODEL_TIMEOUT_MS,
+            taskId,
+          });
+          stateStore.createBackgroundTask({
+            taskId,
+            updateId: update.updateId,
+            userId: update.userId,
+            chatId: update.chatId,
+            command: params.commandName,
+            requestPreview: previewText(params.requestPreview, 240),
+          });
+
+          void tracked.operationPromise
+            .then(async (reply) => {
+              stateStore.markBackgroundTaskCompleted(taskId, reply);
+              const task = stateStore.getBackgroundTask(taskId);
+              if (!task) {
+                logger.warn("background_task_missing_after_complete", { taskId });
+                return;
+              }
+              await deliverBackgroundTask(task, "completion");
+            })
+            .catch(async (error) => {
+              const message = error instanceof Error ? error.message : String(error);
+              const failureReply = `Task in background fallito (ID: ${taskId}): ${message}`;
+              stateStore.markBackgroundTaskFailed(taskId, message, failureReply);
+              const task = stateStore.getBackgroundTask(taskId);
+              if (!task) {
+                logger.warn("background_task_missing_after_failure", { taskId, message });
+                return;
+              }
+              await deliverBackgroundTask(task, "completion");
+            });
+
+          return {
+            reply:
+              `Operazione lunga: continuo in background e ti aggiorno appena finisce.\n` +
+              `Task ID: ${taskId}`,
+            ok: false,
+          };
+        };
+
+        const executePrompt = async (prompt: string, commandName: string) => {
+          const result = await runOperationWithSoftTimeout({
+            commandName,
+            requestPreview: prompt,
+            operation: (signal) => agent.handleMessage(update.userId, prompt, String(update.updateId), signal),
           });
           if (result.ok) {
             handledMessages += 1;
@@ -542,6 +720,7 @@ async function main(): Promise<void> {
               `Uptime: ${uptime}`,
               `Handled messages: ${handledMessages}`,
               `Failed messages: ${failedMessages}`,
+              `Background tasks pending delivery: ${stateStore.countPendingBackgroundTasks()}`,
               `Backend command: ${config.codexCommand}`,
               `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
               `Heartbeat interval: ${Math.floor(HEARTBEAT_INTERVAL_MS / 60000)}m`,
@@ -608,6 +787,7 @@ async function main(): Promise<void> {
                 "heartbeat_last_alert_fingerprint",
                 "heartbeat_last_alert_at",
               ]);
+              stateStore.clearBackgroundTasks();
               logger.debug("state_store_runtime_values_cleared", {
                 keys: [
                   "heartbeat_last_run_at",
@@ -616,6 +796,7 @@ async function main(): Promise<void> {
                   "heartbeat_last_alert_at",
                 ],
               });
+              logger.debug("state_store_background_tasks_cleared");
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               logger.warn("telegram_history_clear_failed", { message });
@@ -662,6 +843,7 @@ async function main(): Promise<void> {
             return relativePath;
           },
           runHeartbeatNow: async () => {
+            await flushPendingBackgroundTasks();
             const outcome = await heartbeatRunner.runScheduledHeartbeat("manual");
             if (outcome.status === "skipped_inflight") {
               return "Heartbeat gia in esecuzione.";
@@ -704,85 +886,74 @@ async function main(): Promise<void> {
           return;
         }
 
-        const result = await runAgentRequestWithTimeout({
-          logger,
-          update,
-          timeoutMs: MODEL_TIMEOUT_MS,
-          operation: () =>
-            runWithTypingAndTimeout({
-              telegram,
-              logger,
-              chatId: update.chatId,
-              updateId: update.updateId,
-              userId: update.userId,
-              timeoutMs: MODEL_TIMEOUT_MS,
-              operation: async (signal) => {
-                const processedAttachments: ProcessedAttachment[] = [];
-                for (let index = 0; index < update.attachments.length; index += 1) {
-                  const attachment = update.attachments[index];
-                  if (!attachment) {
-                    continue;
-                  }
-                  try {
-                    const download = await telegram.downloadFileById(attachment.fileId);
-                    const processed = await attachmentService.processIncoming({
-                      attachment,
-                      download,
-                      updateId: update.updateId,
-                      sequence: index,
-                    });
-                    processedAttachments.push(processed);
-                    logger.info("telegram_attachment_saved", {
-                      updateId: update.updateId,
-                      userId: update.userId,
-                      chatId: update.chatId,
-                      kind: processed.kind,
-                      relativePath: processed.relativePath,
-                      sizeBytes: processed.sizeBytes,
-                      inlineText: processed.inlineText !== null,
-                    });
-                  } catch (error) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    logger.warn("telegram_attachment_processing_failed", {
-                      updateId: update.updateId,
-                      userId: update.userId,
-                      chatId: update.chatId,
-                      attachmentKind: attachment.kind,
-                      message,
-                    });
-                  }
-                }
+        const result = await runOperationWithSoftTimeout({
+          requestPreview: promptText ?? (update.voiceFileId ? "voice message" : "attachment workflow"),
+          operation: async (signal) => {
+            const processedAttachments: ProcessedAttachment[] = [];
+            for (let index = 0; index < update.attachments.length; index += 1) {
+              const attachment = update.attachments[index];
+              if (!attachment) {
+                continue;
+              }
+              try {
+                const download = await telegram.downloadFileById(attachment.fileId);
+                const processed = await attachmentService.processIncoming({
+                  attachment,
+                  download,
+                  updateId: update.updateId,
+                  sequence: index,
+                });
+                processedAttachments.push(processed);
+                logger.info("telegram_attachment_saved", {
+                  updateId: update.updateId,
+                  userId: update.userId,
+                  chatId: update.chatId,
+                  kind: processed.kind,
+                  relativePath: processed.relativePath,
+                  sizeBytes: processed.sizeBytes,
+                  inlineText: processed.inlineText !== null,
+                });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                logger.warn("telegram_attachment_processing_failed", {
+                  updateId: update.updateId,
+                  userId: update.userId,
+                  chatId: update.chatId,
+                  attachmentKind: attachment.kind,
+                  message,
+                });
+              }
+            }
 
-                const attachmentContext = attachmentService.buildPromptContext(processedAttachments);
+            const attachmentContext = attachmentService.buildPromptContext(processedAttachments);
 
-                if (!promptText && update.voiceFileId) {
-                  const audio = await telegram.downloadFileById(update.voiceFileId);
-                  promptText = await transcriber.transcribe(audio.fileBlob, audio.fileName, audio.mimeType ?? update.voiceMimeType);
-                  logger.info("telegram_voice_transcribed", {
-                    updateId: update.updateId,
-                    userId: update.userId,
-                    chatId: update.chatId,
-                    transcriptionLength: promptText.length,
-                    transcriptionPreview: previewText(promptText),
-                  });
-                }
+            if (!promptText && update.voiceFileId) {
+              const audio = await telegram.downloadFileById(update.voiceFileId);
+              promptText = await transcriber.transcribe(audio.fileBlob, audio.fileName, audio.mimeType ?? update.voiceMimeType);
+              logger.info("telegram_voice_transcribed", {
+                updateId: update.updateId,
+                userId: update.userId,
+                chatId: update.chatId,
+                transcriptionLength: promptText.length,
+                transcriptionPreview: previewText(promptText),
+              });
+            }
 
-                if (attachmentContext) {
-                  const basePrompt = promptText ?? "Analizza gli allegati salvati e proponi i prossimi passi.";
-                  promptText = [attachmentContext, "", "User message:", basePrompt].join("\n");
-                }
+            if (attachmentContext) {
+              const basePrompt = promptText ?? "Analizza gli allegati salvati e proponi i prossimi passi.";
+              promptText = [attachmentContext, "", "User message:", basePrompt].join("\n");
+            }
 
-                if (!promptText) {
-                  return update.attachments.length > 0
-                    ? "Non riesco a processare l'allegato inviato."
-                    : "Posso gestire solo messaggi testuali o vocali.";
-                }
+            if (!promptText) {
+              return update.attachments.length > 0
+                ? "Non riesco a processare l'allegato inviato."
+                : "Posso gestire solo messaggi testuali o vocali.";
+            }
 
-                const modelReply = await agent.handleMessage(update.userId, promptText, String(update.updateId), signal);
-                lastPromptByUser.set(update.userId, promptText);
-                return modelReply;
-              },
-            }),
+            const modelReply = await agent.handleMessage(update.userId, promptText, String(update.updateId), signal);
+            lastPromptByUser.set(update.userId, promptText);
+            return modelReply;
+          },
         });
         if (result.ok) {
           handledMessages += 1;

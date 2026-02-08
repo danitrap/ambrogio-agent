@@ -69,4 +69,32 @@ describe("StateStore", () => {
     });
     storeB.close();
   });
+
+  test("stores and updates background task delivery state", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "state-store-"));
+    tempDirs.push(root);
+
+    const storeA = await StateStore.open(root);
+    storeA.createBackgroundTask({
+      taskId: "bg-1",
+      updateId: 101,
+      userId: 202,
+      chatId: 303,
+      command: "retry",
+      requestPreview: "long-running task",
+    });
+    storeA.markBackgroundTaskCompleted("bg-1", "<response_mode>text</response_mode>\ncompleted");
+    expect(storeA.countPendingBackgroundTasks()).toBe(1);
+    storeA.close();
+
+    const storeB = await StateStore.open(root);
+    const pending = storeB.getPendingBackgroundTasks(10);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.taskId).toBe("bg-1");
+    expect(pending[0]?.status).toBe("completed_pending_delivery");
+    expect(pending[0]?.deliveryText).toContain("completed");
+    storeB.markBackgroundTaskDelivered("bg-1");
+    expect(storeB.countPendingBackgroundTasks()).toBe(0);
+    storeB.close();
+  });
 });

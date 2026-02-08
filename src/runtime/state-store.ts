@@ -5,10 +5,46 @@ import { Database } from "bun:sqlite";
 export type ConversationEntry = { role: "user" | "assistant"; text: string };
 export type ConversationStats = { entries: number; userTurns: number; assistantTurns: number; hasContext: boolean };
 export type RecentMessageEntry = { createdAt: string; role: "user" | "assistant"; summary: string };
+export type BackgroundTaskStatus =
+  | "running"
+  | "completed_pending_delivery"
+  | "completed_delivered"
+  | "failed_pending_delivery"
+  | "failed_delivered";
+export type BackgroundTaskEntry = {
+  taskId: string;
+  updateId: number;
+  userId: number;
+  chatId: number;
+  command: string | null;
+  requestPreview: string;
+  status: BackgroundTaskStatus;
+  createdAt: string;
+  timedOutAt: string;
+  completedAt: string | null;
+  deliveredAt: string | null;
+  deliveryText: string | null;
+  errorMessage: string | null;
+};
 
 type RuntimeRow = { value: string };
 type ConversationRow = { role: "user" | "assistant"; text: string };
 type RecentRow = { created_at: string; role: "user" | "assistant"; summary: string };
+type BackgroundTaskRow = {
+  task_id: string;
+  update_id: number;
+  user_id: number;
+  chat_id: number;
+  command: string | null;
+  request_preview: string;
+  status: BackgroundTaskStatus;
+  created_at: string;
+  timed_out_at: string;
+  completed_at: string | null;
+  delivered_at: string | null;
+  delivery_text: string | null;
+  error_message: string | null;
+};
 
 export class StateStore {
   private readonly db: Database;
@@ -42,6 +78,25 @@ export class StateStore {
       );
     `);
     this.db.run("CREATE INDEX IF NOT EXISTS idx_conversation_user_id ON conversation_messages(user_id, id);");
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS background_tasks (
+        task_id TEXT PRIMARY KEY,
+        update_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        chat_id INTEGER NOT NULL,
+        command TEXT,
+        request_preview TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        timed_out_at TEXT NOT NULL,
+        completed_at TEXT,
+        delivered_at TEXT,
+        delivery_text TEXT,
+        error_message TEXT
+      );
+    `);
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_background_status ON background_tasks(status, updated_at);");
   }
 
   static async open(dataRoot: string): Promise<StateStore> {
@@ -168,5 +223,141 @@ export class StateStore {
       assistantTurns: entries - userTurns,
       hasContext: entries > 0,
     };
+  }
+
+  createBackgroundTask(params: {
+    taskId: string;
+    updateId: number;
+    userId: number;
+    chatId: number;
+    command?: string;
+    requestPreview: string;
+  }): void {
+    const now = new Date().toISOString();
+    this.db.run(
+      `INSERT INTO background_tasks (
+        task_id, update_id, user_id, chat_id, command, request_preview, status,
+        created_at, updated_at, timed_out_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7, ?7, ?7)`,
+      [params.taskId, params.updateId, params.userId, params.chatId, params.command ?? null, params.requestPreview, now],
+    );
+  }
+
+  markBackgroundTaskCompleted(taskId: string, deliveryText: string): void {
+    const now = new Date().toISOString();
+    this.db.run(
+      `UPDATE background_tasks
+       SET status = 'completed_pending_delivery',
+           updated_at = ?2,
+           completed_at = ?2,
+           delivery_text = ?3,
+           error_message = NULL
+       WHERE task_id = ?1`,
+      [taskId, now, deliveryText],
+    );
+  }
+
+  markBackgroundTaskFailed(taskId: string, errorMessage: string, deliveryText: string): void {
+    const now = new Date().toISOString();
+    this.db.run(
+      `UPDATE background_tasks
+       SET status = 'failed_pending_delivery',
+           updated_at = ?2,
+           completed_at = ?2,
+           delivery_text = ?3,
+           error_message = ?4
+       WHERE task_id = ?1`,
+      [taskId, now, deliveryText, errorMessage],
+    );
+  }
+
+  markBackgroundTaskDelivered(taskId: string): void {
+    const now = new Date().toISOString();
+    this.db.run(
+      `UPDATE background_tasks
+       SET status = CASE
+         WHEN status = 'failed_pending_delivery' THEN 'failed_delivered'
+         ELSE 'completed_delivered'
+       END,
+           updated_at = ?2,
+           delivered_at = ?2
+       WHERE task_id = ?1
+         AND status IN ('completed_pending_delivery', 'failed_pending_delivery')`,
+      [taskId, now],
+    );
+  }
+
+  getPendingBackgroundTasks(limit = 20): BackgroundTaskEntry[] {
+    const rows = this.db
+      .query(
+        `SELECT task_id, update_id, user_id, chat_id, command, request_preview, status,
+                created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message
+         FROM background_tasks
+         WHERE status IN ('completed_pending_delivery', 'failed_pending_delivery')
+         ORDER BY updated_at ASC
+         LIMIT ?1`,
+      )
+      .all(limit) as BackgroundTaskRow[];
+
+    return rows.map((row) => ({
+      taskId: row.task_id,
+      updateId: row.update_id,
+      userId: row.user_id,
+      chatId: row.chat_id,
+      command: row.command,
+      requestPreview: row.request_preview,
+      status: row.status,
+      createdAt: row.created_at,
+      timedOutAt: row.timed_out_at,
+      completedAt: row.completed_at,
+      deliveredAt: row.delivered_at,
+      deliveryText: row.delivery_text,
+      errorMessage: row.error_message,
+    }));
+  }
+
+  getBackgroundTask(taskId: string): BackgroundTaskEntry | null {
+    const row = this.db
+      .query(
+        `SELECT task_id, update_id, user_id, chat_id, command, request_preview, status,
+                created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message
+         FROM background_tasks
+         WHERE task_id = ?1`,
+      )
+      .get(taskId) as BackgroundTaskRow | null;
+
+    if (!row) {
+      return null;
+    }
+    return {
+      taskId: row.task_id,
+      updateId: row.update_id,
+      userId: row.user_id,
+      chatId: row.chat_id,
+      command: row.command,
+      requestPreview: row.request_preview,
+      status: row.status,
+      createdAt: row.created_at,
+      timedOutAt: row.timed_out_at,
+      completedAt: row.completed_at,
+      deliveredAt: row.delivered_at,
+      deliveryText: row.delivery_text,
+      errorMessage: row.error_message,
+    };
+  }
+
+  countPendingBackgroundTasks(): number {
+    const row = this.db
+      .query(
+        `SELECT COUNT(*) AS total
+         FROM background_tasks
+         WHERE status IN ('completed_pending_delivery', 'failed_pending_delivery')`,
+      )
+      .get() as { total: number } | null;
+    return row?.total ?? 0;
+  }
+
+  clearBackgroundTasks(): void {
+    this.db.run("DELETE FROM background_tasks");
   }
 }
