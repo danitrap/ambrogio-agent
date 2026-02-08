@@ -45,6 +45,7 @@ function buildLastLogMessage(summary: ReturnType<CodexAcpBridge["getLastExecutio
 
   const lines = [
     `Command: ${summary.command}`,
+    `Request ID: ${summary.requestId ?? "n/a"}`,
     `Status: ${summary.status}`,
     `Started: ${summary.startedAt}`,
     `Prompt chars: ${summary.promptLength}`,
@@ -305,7 +306,7 @@ async function main(): Promise<void> {
                 typingController.signal,
               );
               try {
-                reply = await withTimeout(agent.handleMessage(update.userId, lastPrompt), MODEL_TIMEOUT_MS);
+                reply = await withTimeout(agent.handleMessage(update.userId, lastPrompt, String(update.updateId)), MODEL_TIMEOUT_MS);
                 handledMessages += 1;
               } catch (error) {
                 failedMessages += 1;
@@ -383,7 +384,7 @@ async function main(): Promise<void> {
           typingController.signal,
         );
         try {
-          reply = await withTimeout(agent.handleMessage(update.userId, update.text), MODEL_TIMEOUT_MS);
+          reply = await withTimeout(agent.handleMessage(update.userId, update.text, String(update.updateId)), MODEL_TIMEOUT_MS);
           handledMessages += 1;
           lastPromptByUser.set(update.userId, update.text);
         } catch (error) {

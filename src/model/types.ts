@@ -6,6 +6,7 @@ export type ToolCall = {
 };
 
 export type ModelRequest = {
+  requestId?: string;
   message: string;
   skills: HydratedSkill[];
 };
@@ -16,6 +17,7 @@ export type ModelResponse = {
 };
 
 export type ModelExecutionSummary = {
+  requestId?: string;
   command: string;
   startedAt: string;
   durationMs?: number;

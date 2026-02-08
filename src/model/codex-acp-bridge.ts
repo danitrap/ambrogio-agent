@@ -18,6 +18,13 @@ function previewLogText(value: string, max = 240): string {
 }
 
 function buildPromptText(request: ModelRequest): string {
+  const personaContract =
+    "Assistant identity and tone:\n" +
+    "- You are Ambrogio, personal assistant to Signor Daniele.\n" +
+    "- Always address the user as Signor Daniele.\n" +
+    "- Use a formal but warm and deferential tone.\n" +
+    "- Be concise, practical, and action-oriented.\n";
+
   const responseContract =
     "Important response rules:\n" +
     "- Reply with the final user-facing answer only.\n" +
@@ -27,14 +34,14 @@ function buildPromptText(request: ModelRequest): string {
     "- Wrap only your final answer inside <final>...</final> tags.";
 
   if (request.skills.length === 0) {
-    return `${responseContract}\n\nUser request:\n${request.message}`;
+    return `${personaContract}\n${responseContract}\n\nUser request:\n${request.message}`;
   }
 
   const skillSection = request.skills
     .map((skill) => `# Skill: ${skill.name}\n${skill.instructions}`)
     .join("\n\n");
 
-  return `${responseContract}\n\n${skillSection}\n\nUser request:\n${request.message}`;
+  return `${personaContract}\n${responseContract}\n\n${skillSection}\n\nUser request:\n${request.message}`;
 }
 
 function unwrapFinalTags(text: string): string {
@@ -72,6 +79,7 @@ export class CodexAcpBridge implements ModelBridge {
   async respond(request: ModelRequest): Promise<ModelResponse> {
     const startedAt = Date.now();
     const startedAtIso = new Date(startedAt).toISOString();
+    const requestId = request.requestId;
     const prompt = buildPromptText(request);
     const outputPath = `/tmp/codex-last-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
 
@@ -88,12 +96,14 @@ export class CodexAcpBridge implements ModelBridge {
     ];
     const execCommand = this.resolveExecCommand();
     this.lastExecutionSummary = {
+      requestId,
       command: execCommand,
       startedAt: startedAtIso,
       status: "running",
       promptLength: prompt.length,
     };
     this.logger.info("codex_exec_started", {
+      requestId,
       command: execCommand,
       args: execArgs,
       cwd: this.cwd ?? this.rootDir,
@@ -117,8 +127,9 @@ export class CodexAcpBridge implements ModelBridge {
     const stdoutStream = process.stdout;
     const stderrStream = process.stderr;
     if (!stdinSink || typeof stdinSink === "number" || !(stdoutStream instanceof ReadableStream) || !(stderrStream instanceof ReadableStream)) {
-      this.logger.error("exec_pipe_setup_failed", { command: execCommand });
+      this.logger.error("exec_pipe_setup_failed", { requestId, command: execCommand });
       this.lastExecutionSummary = {
+        requestId,
         command: execCommand,
         startedAt: startedAtIso,
         status: "error",
@@ -138,6 +149,16 @@ export class CodexAcpBridge implements ModelBridge {
       const stderr = (await stderrPromise).trim();
       const stdout = (await stdoutPromise).trim();
 
+      this.logger.info("codex_exec_streams", {
+        requestId,
+        command: execCommand,
+        exitCode,
+        stdout,
+        stderr,
+        stdoutLength: stdout.length,
+        stderrLength: stderr.length,
+      });
+
       let text = "";
       try {
         text = (await readFile(outputPath, "utf8")).trim();
@@ -153,6 +174,7 @@ export class CodexAcpBridge implements ModelBridge {
 
       if (exitCode !== 0) {
         this.logger.error("exec_command_failed", {
+          requestId,
           command: execCommand,
           exitCode,
           stderr,
@@ -166,6 +188,7 @@ export class CodexAcpBridge implements ModelBridge {
       if (!text) {
         const durationMs = Date.now() - startedAt;
         this.logger.warn("codex_exec_empty_output", {
+          requestId,
           command: execCommand,
           exitCode,
           durationMs,
@@ -175,6 +198,7 @@ export class CodexAcpBridge implements ModelBridge {
           stderrPreview: previewLogText(stderr),
         });
         this.lastExecutionSummary = {
+          requestId,
           command: execCommand,
           startedAt: startedAtIso,
           durationMs,
@@ -192,6 +216,7 @@ export class CodexAcpBridge implements ModelBridge {
       const responseText = unwrapFinalTags(text);
       const durationMs = Date.now() - startedAt;
       this.logger.info("codex_exec_completed", {
+        requestId,
         command: execCommand,
         exitCode,
         durationMs,
@@ -203,6 +228,7 @@ export class CodexAcpBridge implements ModelBridge {
         outputPreview: previewLogText(responseText),
       });
       this.lastExecutionSummary = {
+        requestId,
         command: execCommand,
         startedAt: startedAtIso,
         durationMs,
@@ -220,15 +246,26 @@ export class CodexAcpBridge implements ModelBridge {
       return { text: responseText, toolCalls: [] };
     } catch (error) {
       const stderr = (await stderrPromise).trim();
+      const stdout = (await stdoutPromise).trim();
       const durationMs = Date.now() - startedAt;
       const message = error instanceof Error ? error.message : String(error);
+      this.logger.error("codex_exec_streams_error", {
+        requestId,
+        command: execCommand,
+        stdout,
+        stderr,
+        stdoutLength: stdout.length,
+        stderrLength: stderr.length,
+      });
       this.logger.error("exec_command_error", {
+        requestId,
         command: execCommand,
         message,
         stderr,
         durationMs,
       });
       this.lastExecutionSummary = {
+        requestId,
         command: execCommand,
         startedAt: startedAtIso,
         durationMs,

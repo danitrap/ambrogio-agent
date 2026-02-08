@@ -24,7 +24,7 @@ export class AgentService {
 
   constructor(private readonly deps: AgentDependencies) {}
 
-  async handleMessage(userId: number, text: string): Promise<string> {
+  async handleMessage(userId: number, text: string, requestId?: string): Promise<string> {
     if (!this.deps.allowlist.isAllowed(userId)) {
       this.deps.logger.warn("unauthorized_user", { userId });
       return "Unauthorized user.";
@@ -38,6 +38,7 @@ export class AgentService {
     const contextualMessage = formatContextualMessage(history, text);
 
     const modelResponse = await this.deps.modelBridge.respond({
+      requestId,
       message: contextualMessage,
       skills: hydrated,
     });
