@@ -1,4 +1,5 @@
 import { mkdir, readFile, realpath, rename, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { AttachmentService, type ProcessedAttachment } from "./attachments/attachment-service";
 import { TelegramAllowlist } from "./auth/allowlist";
@@ -10,9 +11,11 @@ import { ElevenLabsTts } from "./model/elevenlabs-tts";
 import { OpenAiTranscriber } from "./model/openai-transcriber";
 import { runAgentRequestWithTimeout } from "./runtime/agent-request";
 import { handleTelegramCommand } from "./runtime/command-handlers";
+import { shouldDeduplicateHeartbeatMessage } from "./runtime/heartbeat-dedup";
 import { HEARTBEAT_FILE_NAME, HEARTBEAT_INTERVAL_MS, runHeartbeatCycle } from "./runtime/heartbeat";
 import { sendTelegramTextReply } from "./runtime/message-sender";
 import { StateStore } from "./runtime/state-store";
+import { parseOpenTodoItems } from "./runtime/todo-snapshot";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
@@ -26,6 +29,7 @@ const MAX_TELEGRAM_DOCUMENT_BYTES = 49_000_000;
 const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
 const GENERATED_SCANNED_PDFS_RELATIVE_DIR = "generated/scanned-pdfs";
 const MAX_RECENT_TELEGRAM_MESSAGES = 50;
+const HEARTBEAT_ALERT_DEDUP_WINDOW_MS = 4 * 60 * 60 * 1000;
 
 function previewText(value: string, max = 160): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
@@ -489,6 +493,8 @@ async function main(): Promise<void> {
       | "never"
       | "ok"
       | "ok_notice_sent"
+      | "checkin_sent"
+      | "checkin_dropped"
       | "alert_sent"
       | "alert_dropped"
       | "skipped_inflight"
@@ -552,7 +558,22 @@ async function main(): Promise<void> {
     return result.text ?? "";
   };
 
-  const buildHeartbeatRuntimeStatus = (): string => {
+  const readTodoSnapshot = async (): Promise<string[]> => {
+    const todoPath = path.join(config.dataRoot, "TODO.md");
+    try {
+      const content = await readFile(todoPath, "utf8");
+      const openItems = parseOpenTodoItems(content, 10);
+      return openItems.length > 0
+        ? openItems.map((line, index) => `${index + 1}. ${line}`)
+        : ["none"];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn("todo_snapshot_read_failed", { todoPath, message });
+      return ["unavailable"];
+    }
+  };
+
+  const buildHeartbeatRuntimeStatus = async (): Promise<string> => {
     const nowMs = Date.now();
     const localNow = new Date(nowMs);
     const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown";
@@ -582,6 +603,7 @@ async function main(): Promise<void> {
         .getConversation(lastAuthorizedUserId, 8)
         .map((entry, index) => `${index + 1}. ${entry.role}: ${entry.text}`);
     const todoPath = path.join(config.dataRoot, "TODO.md");
+    const todoOpenItems = await readTodoSnapshot();
 
     return [
       "Runtime status:",
@@ -603,6 +625,8 @@ async function main(): Promise<void> {
       ...recentMessages,
       "Conversation context (last 8 turns):",
       ...conversationContext,
+      "TODO snapshot (open items, max 10):",
+      ...todoOpenItems,
       "TODO review guidance: read TODO path directly before deciding follow-up.",
       `Last codex exec: ${codexSummary}`,
     ].join("\n");
@@ -610,7 +634,17 @@ async function main(): Promise<void> {
 
   const runScheduledHeartbeat = async (
     trigger: "timer" | "manual",
-  ): Promise<{ status: "ok" | "ok_notice_sent" | "alert_sent" | "alert_dropped" | "skipped_inflight"; requestId?: string }> => {
+  ): Promise<{
+    status:
+      | "ok"
+      | "ok_notice_sent"
+      | "checkin_sent"
+      | "checkin_dropped"
+      | "alert_sent"
+      | "alert_dropped"
+      | "skipped_inflight";
+    requestId?: string;
+  }> => {
     if (heartbeatInFlight) {
       logger.warn("heartbeat_skipped_inflight");
       heartbeatLastResult = "skipped_inflight";
@@ -631,7 +665,7 @@ async function main(): Promise<void> {
     });
     const requestId = `heartbeat-${Date.now()}`;
     try {
-      const runtimeStatus = buildHeartbeatRuntimeStatus();
+      const runtimeStatus = await buildHeartbeatRuntimeStatus();
       const cycleResult = await runHeartbeatCycle({
         logger,
         readHeartbeatDoc,
@@ -639,8 +673,39 @@ async function main(): Promise<void> {
           runHeartbeatPromptWithTimeout(`${prompt}\n\n${runtimeStatus}`, cycleRequestId),
         getAlertChatId: () => lastAuthorizedChatId,
         sendAlert: async (chatId, message) => {
+          const fingerprint = createHash("sha1").update(message.trim()).digest("hex");
+          const nowMs = Date.now();
+          const nowIso = new Date(nowMs).toISOString();
+          const lastFingerprint = stateStore.getRuntimeValue("heartbeat_last_alert_fingerprint");
+          const lastAlertAt = stateStore.getRuntimeValue("heartbeat_last_alert_at");
+          if (trigger === "timer" && shouldDeduplicateHeartbeatMessage({
+            lastFingerprint,
+            lastSentAtIso: lastAlertAt,
+            nextFingerprint: fingerprint,
+            nowMs,
+            dedupWindowMs: HEARTBEAT_ALERT_DEDUP_WINDOW_MS,
+          })) {
+            logger.info("heartbeat_alert_deduplicated", {
+              chatId,
+              fingerprint,
+              lastAlertAt,
+              dedupWindowMs: HEARTBEAT_ALERT_DEDUP_WINDOW_MS,
+            });
+            return "dropped";
+          }
           await telegram.sendMessage(chatId, message);
           await recordRecentTelegramEntry("assistant", `heartbeat alert: ${previewText(message, 120)}`);
+          stateStore.setRuntimeValue("heartbeat_last_alert_fingerprint", fingerprint);
+          stateStore.setRuntimeValue("heartbeat_last_alert_at", nowIso);
+          logger.debug("state_store_runtime_value_written", {
+            key: "heartbeat_last_alert_fingerprint",
+            value: fingerprint,
+          });
+          logger.debug("state_store_runtime_value_written", {
+            key: "heartbeat_last_alert_at",
+            value: nowIso,
+          });
+          return "sent";
         },
         requestId,
       });
@@ -810,9 +875,16 @@ async function main(): Promise<void> {
               stateStore.clearRuntimeValues([
                 "heartbeat_last_run_at",
                 "heartbeat_last_result",
+                "heartbeat_last_alert_fingerprint",
+                "heartbeat_last_alert_at",
               ]);
               logger.debug("state_store_runtime_values_cleared", {
-                keys: ["heartbeat_last_run_at", "heartbeat_last_result"],
+                keys: [
+                  "heartbeat_last_run_at",
+                  "heartbeat_last_result",
+                  "heartbeat_last_alert_fingerprint",
+                  "heartbeat_last_alert_at",
+                ],
               });
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
@@ -864,8 +936,14 @@ async function main(): Promise<void> {
             if (outcome.status === "ok_notice_sent") {
               return "Heartbeat completato: HEARTBEAT_OK (messaggio HEARTBEAT.md inviato).";
             }
+            if (outcome.status === "checkin_sent") {
+              return "Heartbeat completato: check-in inviato su Telegram.";
+            }
             if (outcome.status === "alert_sent") {
               return "Heartbeat completato: alert inviato su Telegram.";
+            }
+            if (outcome.status === "checkin_dropped") {
+              return "Heartbeat completato: check-in necessario ma nessuna chat autorizzata disponibile.";
             }
             return "Heartbeat completato: alert necessario ma nessuna chat autorizzata disponibile.";
           },

@@ -24,6 +24,7 @@ describe("heartbeat", () => {
       getAlertChatId: () => 123,
       sendAlert: async (chatId, message) => {
         sentAlerts.push({ chatId, message });
+        return "sent";
       },
       requestId: "heartbeat-test",
     });
@@ -42,6 +43,7 @@ describe("heartbeat", () => {
       getAlertChatId: () => 999,
       sendAlert: async (chatId, message) => {
         sentAlerts.push({ chatId, message });
+        return "sent";
       },
       requestId: "heartbeat-test",
     });
@@ -62,6 +64,7 @@ describe("heartbeat", () => {
       getAlertChatId: () => 456,
       sendAlert: async (chatId, message) => {
         sentAlerts.push({ chatId, message });
+        return "sent";
       },
       requestId: "heartbeat-test",
     });
@@ -82,6 +85,7 @@ describe("heartbeat", () => {
       getAlertChatId: () => null,
       sendAlert: async () => {
         sent = true;
+        return "sent";
       },
       requestId: "heartbeat-test",
     });
@@ -102,6 +106,7 @@ describe("heartbeat", () => {
       getAlertChatId: () => 321,
       sendAlert: async (_chatId, message) => {
         sentAlerts.push(message);
+        return "sent";
       },
       requestId: "heartbeat-test",
     });
@@ -109,5 +114,71 @@ describe("heartbeat", () => {
     expect(result.status).toBe("alert_sent");
     expect(sentAlerts).toHaveLength(1);
     expect(sentAlerts[0]).toContain("MODEL_TIMEOUT");
+  });
+
+  test("formats structured heartbeat decision as alert message", async () => {
+    const sentAlerts: string[] = [];
+    const result = await runHeartbeatCycle({
+      logger: new StubLogger(),
+      readHeartbeatDoc: async () => null,
+      runHeartbeatPrompt: async () =>
+        JSON.stringify({
+          action: "alert",
+          issue: "TODO scaduto",
+          impact: "Rischio di dimenticare follow-up",
+          nextStep: "Invia reminder oggi",
+          todoItems: ["Scrivere a Marco", "Confermare riunione"],
+        }),
+      getAlertChatId: () => 321,
+      sendAlert: async (_chatId, message) => {
+        sentAlerts.push(message);
+        return "sent";
+      },
+      requestId: "heartbeat-test",
+    });
+
+    expect(result.status).toBe("alert_sent");
+    expect(sentAlerts).toHaveLength(1);
+    expect(sentAlerts[0]).toContain("Issue: TODO scaduto");
+    expect(sentAlerts[0]).toContain("TODO focus:");
+  });
+
+  test("sends check-in message when decision action is checkin", async () => {
+    const sentAlerts: string[] = [];
+    const result = await runHeartbeatCycle({
+      logger: new StubLogger(),
+      readHeartbeatDoc: async () => null,
+      runHeartbeatPrompt: async () =>
+        JSON.stringify({
+          action: "checkin",
+          issue: "Idle oltre soglia",
+          impact: "Rischio di perdere un follow-up",
+          nextStep: "Invia check-in breve",
+          todoItems: [],
+        }),
+      getAlertChatId: () => 321,
+      sendAlert: async (_chatId, message) => {
+        sentAlerts.push(message);
+        return "sent";
+      },
+      requestId: "heartbeat-test",
+    });
+
+    expect(result.status).toBe("checkin_sent");
+    expect(sentAlerts).toHaveLength(1);
+    expect(sentAlerts[0]).toContain("Heartbeat check-in:");
+  });
+
+  test("drops heartbeat alert when sender deduplicates", async () => {
+    const result = await runHeartbeatCycle({
+      logger: new StubLogger(),
+      readHeartbeatDoc: async () => null,
+      runHeartbeatPrompt: async () => "Need attention",
+      getAlertChatId: () => 456,
+      sendAlert: async () => "dropped",
+      requestId: "heartbeat-test",
+    });
+
+    expect(result.status).toBe("alert_dropped");
   });
 });

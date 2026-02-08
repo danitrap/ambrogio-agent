@@ -3,7 +3,7 @@ FROM oven/bun:1.3.6-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache bash ffmpeg ghostscript imagemagick git nodejs npm
+RUN apk add --no-cache bash ffmpeg ghostscript imagemagick git nodejs npm tzdata
 RUN npm install -g @openai/codex
 
 COPY package.json bun.lock tsconfig.json ./

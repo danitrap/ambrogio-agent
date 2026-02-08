@@ -12,7 +12,7 @@ Personal-only agent wrapper for Telegram with a secure `/data` boundary and Agen
 - Bootstrap automatico delle skill versionate in `./skills` verso `/data/skills` (solo mancanti)
 - Docker hardening baseline (`read_only`, `cap_drop=ALL`, `no-new-privileges`)
 - Backend-tools-only mode via `codex exec` (no local fallback execution).
-- Minimal heartbeat loop every 30 minutes with silent `HEARTBEAT_OK` handling and alert-only Telegram delivery.
+- Minimal heartbeat loop every 30 minutes with `HEARTBEAT_OK` silent mode, explicit `checkin|alert` actions, and Telegram delivery with dedup.
 
 ## Local run
 
@@ -68,19 +68,29 @@ All writable state is under `./data` on the host, mounted to `/data` in the cont
 The agent runs a dedicated heartbeat every 30 minutes (fixed interval, no configuration flags).
 
 - Reads optional `/data/HEARTBEAT.md` instructions.
-- Runs a lightweight model check.
-- If the model replies exactly `HEARTBEAT_OK`, nothing is sent.
-- If the reply is different, empty, or the heartbeat execution fails, it sends a Telegram alert.
+- Runs a lightweight model check with a runtime status block.
+- Runtime status includes local timezone/date-time, heartbeat last state, idle duration, recent Telegram messages, conversation context (last 8 turns), TODO path, and TODO open-item snapshot (max 10).
+- If the model replies exactly `HEARTBEAT_OK`, nothing is sent (unless `HEARTBEAT.md` explicitly asks for an always-on notice message).
+- If action is needed, expected output is JSON:
+  - `{"action":"checkin|alert","issue":"...","impact":"...","nextStep":"...","todoItems":["..."]}`
+- `checkin` and `alert` are different outbound messages.
+- Repeated timer-triggered heartbeat messages are deduplicated for 4 hours using persisted SQLite runtime keys.
+- If heartbeat execution fails, it sends a Telegram alert.
 - Alerts are sent to the most recent authorized chat seen at runtime.
+- `/heartbeat` forces an immediate run and returns a summary of the outcome.
+- `/status` reports heartbeat interval/running/last run/last result plus idle and latest Telegram summary.
+- `/clear` resets conversation state and heartbeat runtime keys (including dedup keys).
 
 Example `HEARTBEAT.md`:
 
 ```md
 # Heartbeat
 
-- Check only for urgent actionable issues.
-- Do not continue stale tasks unless explicitly requested.
+- Use Runtime status as source of truth.
+- Review idle duration, recent messages, and TODO snapshot.
 - If no action is needed, reply exactly HEARTBEAT_OK.
+- If action is needed, reply with JSON only:
+  {"action":"checkin|alert","issue":"...","impact":"...","nextStep":"...","todoItems":["..."]}
 ```
 
 ## Bootstrap skill locali (hosting migration-friendly)

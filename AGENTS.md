@@ -39,3 +39,18 @@ PRs should include:
 
 ## Security & Configuration Tips
 Never commit secrets. Copy `.env.example` to `.env` locally and set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID`.
+
+## Heartbeat Runtime Contract
+- Heartbeat runs every 30 minutes in a dedicated loop in `src/main.ts`.
+- Heartbeat context includes runtime status, local date/time + timezone, last heartbeat state, idle duration, recent Telegram messages, conversation context (last 8 turns), TODO path, and TODO open-item snapshot.
+- Heartbeat instructions are read from `/data/HEARTBEAT.md` and should drive policy decisions (`skills > code`).
+- Expected heartbeat model output:
+  - `HEARTBEAT_OK` when no action is needed.
+  - Otherwise compact JSON: `{"action":"checkin|alert","issue":"...","impact":"...","nextStep":"...","todoItems":["..."]}`.
+- `checkin` and `alert` are distinct runtime outcomes:
+  - `checkin` sends a check-in Telegram message.
+  - `alert` sends an alert Telegram message.
+- Heartbeat deduplicates repeated timer-triggered messages for 4 hours using SQLite runtime state.
+- `/status` must report heartbeat interval/in-flight/last-run/last-result and idle data.
+- `/heartbeat` forces an immediate heartbeat run and returns an explicit result summary.
+- `/clear` must clear heartbeat runtime keys (last run/result + dedup keys) along with conversation runtime state.

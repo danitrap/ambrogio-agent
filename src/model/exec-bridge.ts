@@ -30,6 +30,7 @@ function buildPromptText(request: ModelRequest): string {
     "- Do not include planning/debug/internal reasoning.\n" +
     "- Use available Codex tools (especially shell/apply_patch) when useful, then report the concrete result.\n" +
     "- Keep the answer concise and actionable.\n" +
+    "- For heartbeat requests, follow HEARTBEAT.md policy strictly: return exactly HEARTBEAT_OK when no action is needed; otherwise return compact JSON with action=checkin|alert and fields issue/impact/nextStep/todoItems.\n" +
     "- Wrap only your final answer inside <final>...</final> tags.\n" +
     "- Do not invent custom XML-like tags. Use only these runtime tags when needed: <response_mode>audio|text</response_mode> and <telegram_document>...</telegram_document>.";
 
