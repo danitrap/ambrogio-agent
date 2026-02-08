@@ -1,9 +1,17 @@
-import { chmod, mkdir, unlink } from "node:fs/promises";
+import { chmod, mkdir, realpath, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { createServer, type Server, type Socket } from "node:net";
 import type { StateStore } from "./state-store";
 
-type RpcErrorCode = "BAD_REQUEST" | "NOT_FOUND" | "INVALID_STATE" | "INVALID_TIME" | "INTERNAL";
+type RpcErrorCode =
+  | "BAD_REQUEST"
+  | "NOT_FOUND"
+  | "INVALID_STATE"
+  | "INVALID_TIME"
+  | "FORBIDDEN_PATH"
+  | "PAYLOAD_TOO_LARGE"
+  | "UNSUPPORTED_MEDIA"
+  | "INTERNAL";
 
 type RpcError = {
   code: RpcErrorCode;
@@ -24,6 +32,16 @@ type TaskRpcServerOptions = {
   stateStore: StateStore;
   retryTaskDelivery: (taskId: string) => Promise<string>;
   getStatus?: () => Promise<Record<string, unknown>>;
+  media?: {
+    dataRootRealPath: string;
+    getAuthorizedChatId: () => number | null;
+    maxPhotoBytes: number;
+    maxAudioBytes: number;
+    maxDocumentBytes: number;
+    sendPhoto: (chatId: number, photo: Blob, fileName: string, caption?: string) => Promise<number>;
+    sendAudio: (chatId: number, audio: Blob, fileName: string, caption?: string) => Promise<number>;
+    sendDocument: (chatId: number, document: Blob, fileName: string, caption?: string) => Promise<number>;
+  };
 };
 
 type TaskRpcServerHandle = {
@@ -65,6 +83,52 @@ async function safeUnlink(socketPath: string): Promise<void> {
     }
     throw error;
   }
+}
+
+async function resolveRpcMediaFile(params: {
+  dataRootRealPath: string;
+  inputPath: string;
+  maxBytes: number;
+}): Promise<{ realPath: string; fileName: string; sizeBytes: number }> {
+  if (!path.isAbsolute(params.inputPath)) {
+    throw new Error("BAD_REQUEST:path must be absolute.");
+  }
+  const realPathValue = await realpath(params.inputPath);
+  const normalizedRoot = params.dataRootRealPath.endsWith(path.sep)
+    ? params.dataRootRealPath
+    : `${params.dataRootRealPath}${path.sep}`;
+  if (realPathValue !== params.dataRootRealPath && !realPathValue.startsWith(normalizedRoot)) {
+    throw new Error("FORBIDDEN_PATH:path must be under /data.");
+  }
+  const fileStat = await stat(realPathValue);
+  if (!fileStat.isFile()) {
+    throw new Error("BAD_REQUEST:path is not a file.");
+  }
+  if (fileStat.size > params.maxBytes) {
+    throw new Error(`PAYLOAD_TOO_LARGE:file exceeds limit (${fileStat.size} bytes).`);
+  }
+  return {
+    realPath: realPathValue,
+    fileName: path.basename(realPathValue),
+    sizeBytes: fileStat.size,
+  };
+}
+
+function parseTaggedError(error: unknown): RpcResponse | null {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith("BAD_REQUEST:")) {
+    return rpcError("BAD_REQUEST", message.slice("BAD_REQUEST:".length));
+  }
+  if (message.startsWith("FORBIDDEN_PATH:")) {
+    return rpcError("FORBIDDEN_PATH", message.slice("FORBIDDEN_PATH:".length));
+  }
+  if (message.startsWith("PAYLOAD_TOO_LARGE:")) {
+    return rpcError("PAYLOAD_TOO_LARGE", message.slice("PAYLOAD_TOO_LARGE:".length));
+  }
+  if (message.startsWith("UNSUPPORTED_MEDIA:")) {
+    return rpcError("UNSUPPORTED_MEDIA", message.slice("UNSUPPORTED_MEDIA:".length));
+  }
+  return null;
 }
 
 async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions): Promise<RpcResponse> {
@@ -168,6 +232,60 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
     }
     const status = await options.getStatus();
     return rpcOk(status);
+  }
+
+  if (op === "telegram.sendPhoto" || op === "telegram.sendAudio" || op === "telegram.sendDocument") {
+    const media = options.media;
+    if (!media) {
+      return rpcError("BAD_REQUEST", "Telegram media operations are not available.");
+    }
+    const inputPath = readString(args.path);
+    if (!inputPath) {
+      return rpcError("BAD_REQUEST", "path is required.");
+    }
+    const chatId = media.getAuthorizedChatId();
+    if (chatId === null) {
+      return rpcError("INVALID_STATE", "No authorized Telegram chat available.");
+    }
+
+    try {
+      const resolved = await resolveRpcMediaFile({
+        dataRootRealPath: media.dataRootRealPath,
+        inputPath,
+        maxBytes: op === "telegram.sendPhoto"
+          ? media.maxPhotoBytes
+          : op === "telegram.sendAudio"
+            ? media.maxAudioBytes
+            : media.maxDocumentBytes,
+      });
+      const fileBlob = Bun.file(resolved.realPath);
+      const method = op === "telegram.sendPhoto" ? "sendPhoto" : op === "telegram.sendAudio" ? "sendAudio" : "sendDocument";
+      const telegramMessageId = await (async () => {
+        if (op === "telegram.sendPhoto") {
+          return await media.sendPhoto(chatId, fileBlob, resolved.fileName);
+        }
+        if (op === "telegram.sendAudio") {
+          return await media.sendAudio(chatId, fileBlob, resolved.fileName);
+        }
+        return await media.sendDocument(chatId, fileBlob, resolved.fileName);
+      })();
+      return rpcOk({
+        method,
+        path: resolved.realPath,
+        telegramMessageId,
+        sizeBytes: resolved.sizeBytes,
+      });
+    } catch (error) {
+      const tagged = parseTaggedError(error);
+      if (tagged) {
+        return tagged;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("ENOENT")) {
+        return rpcError("NOT_FOUND", `File non trovato: ${inputPath}`);
+      }
+      return rpcError("INTERNAL", message);
+    }
   }
 
   return rpcError("BAD_REQUEST", `Unknown operation: ${op}`);

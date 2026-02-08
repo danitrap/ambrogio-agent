@@ -182,13 +182,14 @@ describe("TelegramAdapter", () => {
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       requestUrl = String(input);
       requestBody = init?.body;
-      return new Response("{}", { status: 200 });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 91 } }), { status: 200 });
     }) as unknown as typeof fetch;
 
     const adapter = new TelegramAdapter("token");
-    await adapter.sendAudio(999, new Blob(["mp3"], { type: "audio/mpeg" }), "milano_oggi.mp3", "Meteo Milano");
+    const messageId = await adapter.sendAudio(999, new Blob(["mp3"], { type: "audio/mpeg" }), "milano_oggi.mp3", "Meteo Milano");
 
     expect(requestUrl).toContain("/sendAudio");
+    expect(messageId).toBe(91);
     expect(requestBody instanceof FormData).toBe(true);
     const form = requestBody as FormData;
     expect(form.get("chat_id")).toBe("999");
@@ -210,13 +211,14 @@ describe("TelegramAdapter", () => {
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       requestUrl = String(input);
       requestBody = init?.body;
-      return new Response("{}", { status: 200 });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 123 } }), { status: 200 });
     }) as unknown as typeof fetch;
 
     const adapter = new TelegramAdapter("token");
-    await adapter.sendDocument(999, new Blob(["pdf"], { type: "application/pdf" }), "giftcard_scannerizzato.pdf", "File pronto");
+    const messageId = await adapter.sendDocument(999, new Blob(["pdf"], { type: "application/pdf" }), "giftcard_scannerizzato.pdf", "File pronto");
 
     expect(requestUrl).toContain("/sendDocument");
+    expect(messageId).toBe(123);
     expect(requestBody instanceof FormData).toBe(true);
     const form = requestBody as FormData;
     expect(form.get("chat_id")).toBe("999");
@@ -230,5 +232,28 @@ describe("TelegramAdapter", () => {
     globalThis.fetch = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
     const adapter = new TelegramAdapter("token");
     await expect(adapter.sendDocument(1, new Blob(["a"]), "a.pdf")).rejects.toThrow("Telegram sendDocument failed: 500");
+  });
+
+  test("sends photo with multipart form data", async () => {
+    let requestBody: unknown;
+    let requestUrl = "";
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      requestUrl = String(input);
+      requestBody = init?.body;
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 77 } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter("token");
+    const messageId = await adapter.sendPhoto(999, new Blob(["png"], { type: "image/png" }), "shot.png", "Screenshot");
+
+    expect(requestUrl).toContain("/sendPhoto");
+    expect(messageId).toBe(77);
+    expect(requestBody instanceof FormData).toBe(true);
+    const form = requestBody as FormData;
+    expect(form.get("chat_id")).toBe("999");
+    expect(form.get("caption")).toBe("Screenshot");
+    const photo = form.get("photo");
+    expect(photo instanceof File).toBe(true);
+    expect((photo as File).name).toBe("shot.png");
   });
 });

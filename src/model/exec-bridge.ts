@@ -36,10 +36,8 @@ function buildPromptText(request: ModelRequest): string {
     "- Do not include planning/debug/internal reasoning.\n" +
     "- Use available Codex tools (especially shell/apply_patch) when useful, then report the concrete result.\n" +
     "- Keep the answer concise and actionable.\n" +
-    "- Wrap only your final answer inside <final>...</final> tags.\n" +
-    "- Do not invent custom XML-like tags.\n" +
-    "- To ask runtime to upload a file on Telegram, include one or more tags in the final answer: <telegram_document>/data/path/to/file.ext</telegram_document>.\n" +
-    "- Use only existing files under /data, and keep user-facing text outside tags.";
+    "- Do not use XML-like tags.\n" +
+    "- To deliver files/media on Telegram, use local RPC via ambrogioctl instead of embedding tags in your response.";
 
   return `${personaContract}\n${responseContract}\n\nUser request:\n${request.message}`;
 }

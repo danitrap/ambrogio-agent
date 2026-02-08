@@ -123,6 +123,9 @@ bun run ctl -- tasks inspect --id <task-id> --json
 bun run ctl -- tasks create --run-at 2099-01-01T10:00:00.000Z --prompt "..." --user-id 123 --chat-id 123 --json
 bun run ctl -- tasks cancel --id <task-id> --json
 bun run ctl -- tasks retry --id <task-id> --json
+bun run ctl -- telegram send-photo --path /data/path/to/image.png --json
+bun run ctl -- telegram send-audio --path /data/path/to/audio.mp3 --json
+bun run ctl -- telegram send-document --path /data/path/to/file.pdf --json
 ```
 
 Example `HEARTBEAT.md`:
@@ -155,7 +158,7 @@ Se serve, puoi cambiare sorgente con `PROJECT_SKILLS_ROOT`.
 The service runs `codex exec` per request and passes the prompt via stdin.
 
 - `--output-last-message` is used to capture the final assistant message.
-- The bridge strips `<final>...</final>` tags before sending to Telegram.
+- File/photo/audio delivery is performed through local RPC (`ambrogioctl telegram ...`), not XML-like output tags.
 - Tool execution is handled inside Codex runtime (`shell`/`apply_patch`), not by host-side tool calls.
 
 ## Tests

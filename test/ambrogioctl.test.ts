@@ -127,4 +127,46 @@ describe("ambrogioctl", () => {
       },
     ]);
   });
+
+  test("telegram send-photo forwards path and prints human output", async () => {
+    const calls: RecordedCall[] = [];
+    const out: string[] = [];
+    const code = await runAmbrogioCtl(["telegram", "send-photo", "--path", "/data/pic.png"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendRpc: async (op, args) => {
+        calls.push({ op, args });
+        return {
+          ok: true,
+          result: { method: "sendPhoto", path: "/data/pic.png", telegramMessageId: 42, sizeBytes: 1024 },
+        };
+      },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ op: "telegram.sendPhoto", args: { path: "/data/pic.png" } }]);
+    expect(out[0]).toContain("method: sendPhoto");
+    expect(out[0]).toContain("telegramMessageId: 42");
+  });
+
+  test("telegram send-document supports json output", async () => {
+    const out: string[] = [];
+    const code = await runAmbrogioCtl(["telegram", "send-document", "--path", "/data/a.pdf", "--json"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendRpc: async () => ({
+        ok: true,
+        result: { method: "sendDocument", path: "/data/a.pdf", telegramMessageId: 77, sizeBytes: 55 },
+      }),
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+    expect(code).toBe(0);
+    expect(JSON.parse(out[0] ?? "")).toEqual({
+      method: "sendDocument",
+      path: "/data/a.pdf",
+      telegramMessageId: 77,
+      sizeBytes: 55,
+    });
+  });
 });

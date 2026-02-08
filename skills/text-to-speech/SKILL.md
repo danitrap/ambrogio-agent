@@ -10,29 +10,17 @@ metadata: {"openclaw": {"requires": {"env": ["ELEVENLABS_API_KEY"]}, "primaryEnv
 
 Generate natural speech from text - supports 74+ languages, multiple models for quality vs latency tradeoffs.
 
-## Response Mode Contract (Ambrogio)
+## Delivery Contract (Ambrogio)
 
-Reference: il contratto runtime ufficiale per invio audio/file e definito nel system prompt del bridge modello.
+Do not use XML-like tags for delivery.
 
-When you want the runtime to send your answer as Telegram audio, prepend exactly:
+When Telegram audio delivery is requested:
 
-```text
-<response_mode>audio</response_mode>
-```
-
-Then continue with the normal user-facing answer text.
-
-If audio is not needed, prepend:
-
-```text
-<response_mode>text</response_mode>
-```
-
-Rules:
-- Put the tag at the beginning of the final answer.
-- Use only `audio` or `text`.
-- Keep the rest of the answer natural and user-facing.
-- Do not use any other custom tags (for example `<telegram_audio>`). If you need file delivery, use plain text instructions unless another explicitly supported runtime tag is documented.
+1. Generate/save an audio file under `/data/...` (for example `/data/generated/audio/...mp3`).
+2. Send it via local RPC:
+   - Docker: `bun run /app/src/cli/ambrogioctl.ts telegram send-audio --path "<audio-path>" --json`
+   - Local dev: `bun run /data/../src/cli/ambrogioctl.ts telegram send-audio --path "<audio-path>" --json`
+3. Reply to the user with a concise confirmation.
 
 > **Setup:** See [Installation Guide](references/installation.md). For JavaScript, use `@elevenlabs/*` packages only.
 

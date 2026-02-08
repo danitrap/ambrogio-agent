@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createConnection } from "node:net";
@@ -204,6 +204,121 @@ describe("TaskRpcServer", () => {
     expect(notFound).toEqual({
       ok: false,
       error: { code: "NOT_FOUND", message: "Task non trovato: missing" },
+    });
+
+    await server.close();
+    stateStore.close();
+  });
+
+  test("supports telegram media rpc with path and size enforcement", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "task-rpc-media-"));
+    tempDirs.push(root);
+    const dataRoot = path.join(root, "data");
+    const mediaDir = path.join(dataRoot, "generated");
+    await mkdir(mediaDir, { recursive: true });
+    const dataRootRealPath = await realpath(dataRoot);
+    await writeFile(path.join(mediaDir, "photo.png"), "image-bytes");
+    await writeFile(path.join(mediaDir, "audio.mp3"), "audio-bytes");
+    await writeFile(path.join(mediaDir, "doc.pdf"), "pdf-bytes");
+
+    const stateStore = await StateStore.open(root);
+    const socketPath = path.join(root, "runtime", "ambrogio-media.sock");
+    const calls: Array<{ method: string; chatId: number; fileName: string }> = [];
+    const server = await startTaskRpcServer({
+      socketPath,
+      stateStore,
+      retryTaskDelivery: async () => "ok",
+      media: {
+        dataRootRealPath,
+        getAuthorizedChatId: () => 99,
+        maxPhotoBytes: 1000,
+        maxAudioBytes: 1000,
+        maxDocumentBytes: 10,
+        sendPhoto: async (chatId, _blob, fileName) => {
+          calls.push({ method: "sendPhoto", chatId, fileName });
+          return 1;
+        },
+        sendAudio: async (chatId, _blob, fileName) => {
+          calls.push({ method: "sendAudio", chatId, fileName });
+          return 2;
+        },
+        sendDocument: async (chatId, _blob, fileName) => {
+          calls.push({ method: "sendDocument", chatId, fileName });
+          return 3;
+        },
+      },
+    });
+
+    const sendPhoto = await rpcCall(socketPath, {
+      op: "telegram.sendPhoto",
+      args: { path: path.join(mediaDir, "photo.png") },
+    });
+    const photoRealPath = await realpath(path.join(mediaDir, "photo.png"));
+    expect(sendPhoto).toEqual({
+      ok: true,
+      result: {
+        method: "sendPhoto",
+        path: photoRealPath,
+        telegramMessageId: 1,
+        sizeBytes: "image-bytes".length,
+      },
+    });
+
+    const sendAudio = await rpcCall(socketPath, {
+      op: "telegram.sendAudio",
+      args: { path: path.join(mediaDir, "audio.mp3") },
+    });
+    const audioRealPath = await realpath(path.join(mediaDir, "audio.mp3"));
+    expect(sendAudio).toEqual({
+      ok: true,
+      result: {
+        method: "sendAudio",
+        path: audioRealPath,
+        telegramMessageId: 2,
+        sizeBytes: "audio-bytes".length,
+      },
+    });
+
+    const sendDocument = await rpcCall(socketPath, {
+      op: "telegram.sendDocument",
+      args: { path: path.join(mediaDir, "doc.pdf") },
+    });
+    const documentRealPath = await realpath(path.join(mediaDir, "doc.pdf"));
+    expect(sendDocument).toEqual({
+      ok: true,
+      result: {
+        method: "sendDocument",
+        path: documentRealPath,
+        telegramMessageId: 3,
+        sizeBytes: "pdf-bytes".length,
+      },
+    });
+
+    expect(calls).toEqual([
+      { method: "sendPhoto", chatId: 99, fileName: "photo.png" },
+      { method: "sendAudio", chatId: 99, fileName: "audio.mp3" },
+      { method: "sendDocument", chatId: 99, fileName: "doc.pdf" },
+    ]);
+
+    const outsidePath = path.join(root, "outside.txt");
+    await writeFile(outsidePath, "x");
+    const forbidden = await rpcCall(socketPath, {
+      op: "telegram.sendDocument",
+      args: { path: outsidePath },
+    });
+    expect(forbidden).toEqual({
+      ok: false,
+      error: { code: "FORBIDDEN_PATH", message: "path must be under /data." },
+    });
+
+    await writeFile(path.join(mediaDir, "big.bin"), "12345678901");
+    const oversized = await rpcCall(socketPath, {
+      op: "telegram.sendDocument",
+      args: { path: path.join(mediaDir, "big.bin") },
+    });
+    expect(oversized).toEqual({
+      ok: false,
+      error: { code: "PAYLOAD_TOO_LARGE", message: "file exceeds limit (11 bytes)." },
     });
 
     await server.close();

@@ -26,7 +26,7 @@ function mapErrorCodeToExit(code: string): number {
   if (code === "NOT_FOUND") {
     return 3;
   }
-  if (code === "INVALID_STATE" || code === "INVALID_TIME") {
+  if (code === "INVALID_STATE" || code === "INVALID_TIME" || code === "FORBIDDEN_PATH" || code === "PAYLOAD_TOO_LARGE") {
     return 4;
   }
   if (code === "BAD_REQUEST") {
@@ -128,8 +128,62 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
     }
   }
 
+  if (scope === "telegram") {
+    if (!action) {
+      stderr("Usage: ambrogioctl telegram <send-photo|send-audio|send-document> --path <absolute-path-under-data-root> [--json]");
+      return 2;
+    }
+    const json = hasFlag(args, "--json");
+    const mediaPath = readFlag(args, "--path");
+    if (!mediaPath) {
+      stderr("--path is required.");
+      return 2;
+    }
+
+    const op = action === "send-photo"
+      ? "telegram.sendPhoto"
+      : action === "send-audio"
+        ? "telegram.sendAudio"
+        : action === "send-document"
+          ? "telegram.sendDocument"
+          : "";
+    if (!op) {
+      stderr(`Unknown action: ${action}`);
+      return 2;
+    }
+
+    try {
+      const response = await sendRpc(op, { path: mediaPath });
+      if (!response.ok) {
+        stderr(response.error.message);
+        return mapErrorCodeToExit(response.error.code);
+      }
+      if (json) {
+        stdout(JSON.stringify(response.result));
+      } else {
+        const result = response.result as {
+          method?: string;
+          path?: string;
+          telegramMessageId?: number;
+          sizeBytes?: number;
+        };
+        stdout([
+          `method: ${result.method ?? "n/a"}`,
+          `path: ${result.path ?? mediaPath}`,
+          `telegramMessageId: ${typeof result.telegramMessageId === "number" ? result.telegramMessageId : "n/a"}`,
+          `sizeBytes: ${typeof result.sizeBytes === "number" ? result.sizeBytes : "n/a"}`,
+        ].join("\n"));
+      }
+      return 0;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      stderr(message);
+      return 10;
+    }
+  }
+
   if (scope !== "tasks" || !action) {
-    stderr("Usage: ambrogioctl <tasks|status> [options]");
+    stderr("Usage: ambrogioctl <tasks|status|telegram> [options]");
     return 2;
   }
 

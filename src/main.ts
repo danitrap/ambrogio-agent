@@ -26,6 +26,7 @@ import { parseTelegramCommand } from "./telegram/commands";
 
 const TYPING_INTERVAL_MS = 4_000;
 const MODEL_TIMEOUT_MS = 60_000;
+const MAX_TELEGRAM_PHOTO_BYTES = 10_000_000;
 const MAX_TELEGRAM_AUDIO_BYTES = 49_000_000;
 const MAX_TELEGRAM_DOCUMENT_BYTES = 49_000_000;
 const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
@@ -591,6 +592,16 @@ async function main(): Promise<void> {
       return retryTaskDelivery(taskId);
     },
     getStatus: getRuntimeStatus,
+    media: {
+      dataRootRealPath,
+      getAuthorizedChatId: () => lastAuthorizedChatId,
+      maxPhotoBytes: MAX_TELEGRAM_PHOTO_BYTES,
+      maxAudioBytes: MAX_TELEGRAM_AUDIO_BYTES,
+      maxDocumentBytes: MAX_TELEGRAM_DOCUMENT_BYTES,
+      sendPhoto: async (chatId, photo, fileName, caption) => await telegram.sendPhoto(chatId, photo, fileName, caption),
+      sendAudio: async (chatId, audio, fileName, caption) => await telegram.sendAudio(chatId, audio, fileName, caption),
+      sendDocument: async (chatId, document, fileName, caption) => await telegram.sendDocument(chatId, document, fileName, caption),
+    },
   });
   logger.info("task_rpc_server_started", { socketPath: rpcSocketPath });
 

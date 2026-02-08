@@ -209,7 +209,39 @@ export class TelegramAdapter {
     }
   }
 
-  async sendAudio(chatId: number, audioBlob: Blob, fileName: string, caption?: string): Promise<void> {
+  private async parseSendResult(response: Response, method: string): Promise<number> {
+    if (!response.ok) {
+      throw new Error(`Telegram ${method} failed: ${response.status}`);
+    }
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      result?: { message_id?: unknown };
+    };
+    if (!payload.ok || typeof payload.result?.message_id !== "number") {
+      throw new Error(`Telegram ${method} returned invalid payload`);
+    }
+    return payload.result.message_id;
+  }
+
+  async sendPhoto(chatId: number, photoBlob: Blob, fileName: string, caption?: string): Promise<number> {
+    const body = new FormData();
+    body.append("chat_id", String(chatId));
+    body.append("photo", new File([photoBlob], fileName, {
+      type: photoBlob.type || "application/octet-stream",
+    }));
+    if (caption) {
+      body.append("caption", caption);
+    }
+
+    const response = await fetch(`${this.baseUrl}/sendPhoto`, {
+      method: "POST",
+      body,
+    });
+
+    return await this.parseSendResult(response, "sendPhoto");
+  }
+
+  async sendAudio(chatId: number, audioBlob: Blob, fileName: string, caption?: string): Promise<number> {
     const body = new FormData();
     body.append("chat_id", String(chatId));
     body.append("audio", new File([audioBlob], fileName, {
@@ -224,12 +256,10 @@ export class TelegramAdapter {
       body,
     });
 
-    if (!response.ok) {
-      throw new Error(`Telegram sendAudio failed: ${response.status}`);
-    }
+    return await this.parseSendResult(response, "sendAudio");
   }
 
-  async sendDocument(chatId: number, documentBlob: Blob, fileName: string, caption?: string): Promise<void> {
+  async sendDocument(chatId: number, documentBlob: Blob, fileName: string, caption?: string): Promise<number> {
     const body = new FormData();
     body.append("chat_id", String(chatId));
     body.append("document", new File([documentBlob], fileName, {
@@ -244,8 +274,6 @@ export class TelegramAdapter {
       body,
     });
 
-    if (!response.ok) {
-      throw new Error(`Telegram sendDocument failed: ${response.status}`);
-    }
+    return await this.parseSendResult(response, "sendDocument");
   }
 }

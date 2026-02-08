@@ -26,11 +26,16 @@ bash /data/.codex/skills/fake-scanned-pdf/scripts/fakescanner.sh "<input.pdf>"
 
 - After execution, verify that the output file exists.
 - Report the final output path and file size.
-- Reference: il contratto runtime ufficiale per invio file su Telegram e definito nel system prompt del bridge modello.
-- When conversion succeeds, include this tag in the final answer so runtime auto-sends the PDF on Telegram:
+- If user asks Telegram delivery, send via local RPC:
 
-```text
-<telegram_document>/data/generated/scanned-pdfs/.../file_scannerizzato.pdf</telegram_document>
+```bash
+bun run /app/src/cli/ambrogioctl.ts telegram send-document --path "<output.pdf>" --json
+```
+
+Local dev fallback:
+
+```bash
+bun run /data/../src/cli/ambrogioctl.ts telegram send-document --path "<output.pdf>" --json
 ```
 
 ## Guardrails

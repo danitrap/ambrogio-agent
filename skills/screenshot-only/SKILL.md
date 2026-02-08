@@ -18,7 +18,9 @@ bash /data/.codex/skills/screenshot-only/scripts/screenshot-url.sh "<url>"
 
 - The script stores output under `/data/generated/screenshots/YYYY/MM/DD/`.
 - Return saved path and file size.
-- If user asked delivery on Telegram, include `<telegram_document>` for the PNG.
+- If user asked delivery on Telegram, send the PNG via RPC:
+  - Docker: `bun run /app/src/cli/ambrogioctl.ts telegram send-photo --path "<png-path>" --json`
+  - Local dev: `bun run /data/../src/cli/ambrogioctl.ts telegram send-photo --path "<png-path>" --json`
 
 ## Guardrails
 
