@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { realpath, stat } from "node:fs/promises";
+import { realpath, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import { AttachmentService, type ProcessedAttachment } from "./attachments/attachment-service";
 import { TelegramAllowlist } from "./auth/allowlist";
@@ -14,13 +14,15 @@ import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
 import { parseTelegramCommand } from "./telegram/commands";
-import { parseResponseMode } from "./telegram/response-mode";
+import { parseTelegramResponse } from "./telegram/response-mode";
 import { FsTools } from "./tools/fs-tools";
 
 const TYPING_INTERVAL_MS = 4_000;
 const MODEL_TIMEOUT_MS = 180_000;
 const MAX_TELEGRAM_AUDIO_BYTES = 49_000_000;
+const MAX_TELEGRAM_DOCUMENT_BYTES = 49_000_000;
 const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
+const GENERATED_SCANNED_PDFS_RELATIVE_DIR = "generated/scanned-pdfs";
 
 function previewText(value: string, max = 160): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
@@ -122,6 +124,80 @@ async function resolveAudioPathForUpload(rootRealPath: string, inputPath: string
   };
 }
 
+async function resolveDocumentPathForUpload(rootRealPath: string, inputPath: string): Promise<{ realPath: string; relativePath: string }> {
+  const trimmedPath = inputPath.trim();
+  if (!trimmedPath) {
+    throw new Error("Document path is empty");
+  }
+
+  const absolute = path.resolve(rootRealPath, trimmedPath);
+  const real = await realpath(absolute);
+  ensurePathWithinRoot(rootRealPath, real);
+
+  const fileStat = await stat(real);
+  if (!fileStat.isFile()) {
+    throw new Error("Target is not a file");
+  }
+  if (fileStat.size > MAX_TELEGRAM_DOCUMENT_BYTES) {
+    throw new Error(`File too large for Telegram document upload (${fileStat.size} bytes)`);
+  }
+
+  return {
+    realPath: real,
+    relativePath: path.relative(rootRealPath, real),
+  };
+}
+
+async function sendTaggedDocumentIfPresent(
+  telegram: TelegramAdapter,
+  logger: Logger,
+  rootRealPath: string,
+  update: { updateId: number; userId: number; chatId: number },
+  documentPath: string | null,
+): Promise<string | null> {
+  if (!documentPath) {
+    return null;
+  }
+
+  try {
+    let { realPath, relativePath } = await resolveDocumentPathForUpload(rootRealPath, documentPath);
+    if (relativePath.startsWith("attachments/") && path.basename(relativePath).includes("scannerizzato")) {
+      const now = new Date();
+      const dateFolder = path.join(
+        String(now.getUTCFullYear()),
+        String(now.getUTCMonth() + 1).padStart(2, "0"),
+        String(now.getUTCDate()).padStart(2, "0"),
+      );
+      const generatedFolder = path.join(rootRealPath, GENERATED_SCANNED_PDFS_RELATIVE_DIR, dateFolder);
+      await mkdir(generatedFolder, { recursive: true });
+      const targetPath = path.join(generatedFolder, path.basename(relativePath));
+      await rename(realPath, targetPath);
+      realPath = await realpath(targetPath);
+      relativePath = path.relative(rootRealPath, realPath);
+    }
+
+    const documentBlob = Bun.file(realPath);
+    await telegram.sendDocument(update.chatId, documentBlob, path.basename(relativePath), `File: ${relativePath}`);
+    logger.info("telegram_document_sent", {
+      updateId: update.updateId,
+      userId: update.userId,
+      chatId: update.chatId,
+      filePath: relativePath,
+    });
+    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn("telegram_document_send_failed", {
+      updateId: update.updateId,
+      userId: update.userId,
+      chatId: update.chatId,
+      message,
+      documentPath,
+    });
+    return `Documento non inviato (${message}).`;
+  }
+}
+
 function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
     return Promise.resolve();
@@ -192,6 +268,7 @@ async function main(): Promise<void> {
 
   await mkdir(homeDir, { recursive: true });
   await mkdir(codexHome, { recursive: true });
+  await mkdir(path.join(config.dataRoot, GENERATED_SCANNED_PDFS_RELATIVE_DIR), { recursive: true });
 
   const telegram = new TelegramAdapter(config.telegramBotToken);
   const allowlist = new TelegramAllowlist(config.telegramAllowedUserId);
@@ -394,10 +471,18 @@ async function main(): Promise<void> {
                 await typingLoop;
               }
 
-              const parsed = parseResponseMode(reply);
+              const parsed = parseTelegramResponse(reply);
+              const documentWarning = await sendTaggedDocumentIfPresent(
+                telegram,
+                logger,
+                dataRootRealPath,
+                update,
+                parsed.documentPath,
+              );
+              const replyText = documentWarning ? `${documentWarning}\n\n${parsed.text}` : parsed.text;
               if (parsed.mode === "audio" && tts) {
                 try {
-                  const audioBlob = await tts.synthesize(parsed.text.slice(0, 4000));
+                  const audioBlob = await tts.synthesize(replyText.slice(0, 4000));
                   await telegram.sendAudio(update.chatId, audioBlob, `retry-${update.updateId}.mp3`);
                   logger.info("telegram_audio_reply_sent", {
                     updateId: update.updateId,
@@ -416,10 +501,10 @@ async function main(): Promise<void> {
                     mode: parsed.mode,
                     message,
                   });
-                  await sendCommandReply(parsed.text);
+                  await sendCommandReply(replyText);
                 }
               } else {
-                await sendCommandReply(parsed.text);
+                await sendCommandReply(replyText);
               }
               continue;
             }
@@ -464,8 +549,16 @@ async function main(): Promise<void> {
                 await typingLoop;
               }
 
-              const parsed = parseResponseMode(reply);
-              const audioText = parsed.text.slice(0, 4000);
+              const parsed = parseTelegramResponse(reply);
+              const documentWarning = await sendTaggedDocumentIfPresent(
+                telegram,
+                logger,
+                dataRootRealPath,
+                update,
+                parsed.documentPath,
+              );
+              const replyText = documentWarning ? `${documentWarning}\n\n${parsed.text}` : parsed.text;
+              const audioText = replyText.slice(0, 4000);
               if (!tts) {
                 await sendCommandReply("ELEVENLABS_API_KEY non configurata, invio testo:\n\n" + audioText.slice(0, 3800));
                 continue;
@@ -670,8 +763,15 @@ async function main(): Promise<void> {
           await typingLoop;
         }
 
-        const parsed = parseResponseMode(reply);
-        const outbound = parsed.text.slice(0, 4000);
+        const parsed = parseTelegramResponse(reply);
+        const documentWarning = await sendTaggedDocumentIfPresent(
+          telegram,
+          logger,
+          dataRootRealPath,
+          update,
+          parsed.documentPath,
+        );
+        const outbound = (documentWarning ? `${documentWarning}\n\n${parsed.text}` : parsed.text).slice(0, 4000);
         if (parsed.mode === "audio" && tts) {
           try {
             const audioBlob = await tts.synthesize(outbound);

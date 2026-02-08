@@ -227,4 +227,24 @@ export class TelegramAdapter {
       throw new Error(`Telegram sendAudio failed: ${response.status}`);
     }
   }
+
+  async sendDocument(chatId: number, documentBlob: Blob, fileName: string, caption?: string): Promise<void> {
+    const body = new FormData();
+    body.append("chat_id", String(chatId));
+    body.append("document", new File([documentBlob], fileName, {
+      type: documentBlob.type || "application/octet-stream",
+    }));
+    if (caption) {
+      body.append("caption", caption);
+    }
+
+    const response = await fetch(`${this.baseUrl}/sendDocument`, {
+      method: "POST",
+      body,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Telegram sendDocument failed: ${response.status}`);
+    }
+  }
 }

@@ -183,4 +183,32 @@ describe("TelegramAdapter", () => {
     const adapter = new TelegramAdapter("token");
     await expect(adapter.sendAudio(1, new Blob(["a"]), "a.mp3")).rejects.toThrow("Telegram sendAudio failed: 500");
   });
+
+  test("sends document with multipart form data", async () => {
+    let requestBody: unknown;
+    let requestUrl = "";
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      requestUrl = String(input);
+      requestBody = init?.body;
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter("token");
+    await adapter.sendDocument(999, new Blob(["pdf"], { type: "application/pdf" }), "giftcard_scannerizzato.pdf", "File pronto");
+
+    expect(requestUrl).toContain("/sendDocument");
+    expect(requestBody instanceof FormData).toBe(true);
+    const form = requestBody as FormData;
+    expect(form.get("chat_id")).toBe("999");
+    expect(form.get("caption")).toBe("File pronto");
+    const document = form.get("document");
+    expect(document instanceof File).toBe(true);
+    expect((document as File).name).toBe("giftcard_scannerizzato.pdf");
+  });
+
+  test("throws when sending document fails", async () => {
+    globalThis.fetch = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
+    const adapter = new TelegramAdapter("token");
+    await expect(adapter.sendDocument(1, new Blob(["a"]), "a.pdf")).rejects.toThrow("Telegram sendDocument failed: 500");
+  });
 });

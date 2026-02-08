@@ -5,6 +5,10 @@ export type ParsedResponseMode = {
   text: string;
 };
 
+export type ParsedTelegramResponse = ParsedResponseMode & {
+  documentPath: string | null;
+};
+
 export function parseResponseMode(rawText: string): ParsedResponseMode {
   const trimmed = rawText.trim();
   const match = trimmed.match(/^<response_mode>\s*(audio|text)\s*<\/response_mode>\s*/i);
@@ -20,5 +24,25 @@ export function parseResponseMode(rawText: string): ParsedResponseMode {
   return {
     mode,
     text,
+  };
+}
+
+export function parseTelegramResponse(rawText: string): ParsedTelegramResponse {
+  const modeParsed = parseResponseMode(rawText);
+  const documentMatch = modeParsed.text.match(/<telegram_document>\s*([^<]+?)\s*<\/telegram_document>\s*/i);
+  if (!documentMatch) {
+    return {
+      mode: modeParsed.mode,
+      text: modeParsed.text,
+      documentPath: null,
+    };
+  }
+
+  const documentPath = documentMatch[1]?.trim() ?? "";
+  const text = modeParsed.text.replace(documentMatch[0], "").trim();
+  return {
+    mode: modeParsed.mode,
+    text,
+    documentPath: documentPath.length > 0 ? documentPath : null,
   };
 }
