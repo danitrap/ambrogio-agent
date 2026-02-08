@@ -1,5 +1,4 @@
-import { mkdir, readFile, realpath, rename, stat } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { mkdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { AttachmentService, type ProcessedAttachment } from "./attachments/attachment-service";
 import { TelegramAllowlist } from "./auth/allowlist";
@@ -11,16 +10,18 @@ import { ElevenLabsTts } from "./model/elevenlabs-tts";
 import { OpenAiTranscriber } from "./model/openai-transcriber";
 import { runAgentRequestWithTimeout } from "./runtime/agent-request";
 import { handleTelegramCommand } from "./runtime/command-handlers";
-import { shouldDeduplicateHeartbeatMessage } from "./runtime/heartbeat-dedup";
-import { HEARTBEAT_FILE_NAME, HEARTBEAT_INTERVAL_MS, runHeartbeatCycle } from "./runtime/heartbeat";
+import { createHeartbeatRunner } from "./runtime/heartbeat-runner";
+import { parseQuietHours } from "./runtime/heartbeat-quiet-hours";
+import { HEARTBEAT_FILE_NAME, HEARTBEAT_INTERVAL_MS } from "./runtime/heartbeat";
 import { sendTelegramTextReply } from "./runtime/message-sender";
+import { dispatchAssistantReply, resolveAudioPathForUpload } from "./runtime/reply-dispatcher";
 import { StateStore } from "./runtime/state-store";
+import { startTelegramUpdateLoop } from "./runtime/telegram-update-loop";
 import { parseOpenTodoItems } from "./runtime/todo-snapshot";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
 import { parseTelegramCommand } from "./telegram/commands";
-import { parseTelegramResponse } from "./telegram/response-mode";
 
 const TYPING_INTERVAL_MS = 4_000;
 const MODEL_TIMEOUT_MS = 180_000;
@@ -96,120 +97,6 @@ function buildLastLogMessage(summary: ReturnType<ExecBridge["getLastExecutionSum
   return lines.join("\n");
 }
 
-function ensurePathWithinRoot(rootRealPath: string, targetRealPath: string): void {
-  const normalizedRoot = rootRealPath.endsWith(path.sep) ? rootRealPath : `${rootRealPath}${path.sep}`;
-  if (targetRealPath !== rootRealPath && !targetRealPath.startsWith(normalizedRoot)) {
-    throw new Error(`Path escapes root: ${targetRealPath}`);
-  }
-}
-
-type ResolvedUploadPath = { realPath: string; relativePath: string };
-
-async function resolveFilePathForUpload(
-  rootRealPath: string,
-  inputPath: string,
-  opts: { emptyPathError: string; maxBytes: number; tooLargeErrorPrefix: string },
-): Promise<ResolvedUploadPath> {
-  const trimmedPath = inputPath.trim();
-  if (!trimmedPath) {
-    throw new Error(opts.emptyPathError);
-  }
-
-  const absolute = path.resolve(rootRealPath, trimmedPath);
-  const real = await realpath(absolute);
-  ensurePathWithinRoot(rootRealPath, real);
-
-  const fileStat = await stat(real);
-  if (!fileStat.isFile()) {
-    throw new Error("Target is not a file");
-  }
-  if (fileStat.size > opts.maxBytes) {
-    throw new Error(`${opts.tooLargeErrorPrefix} (${fileStat.size} bytes)`);
-  }
-
-  return {
-    realPath: real,
-    relativePath: path.relative(rootRealPath, real),
-  };
-}
-
-async function resolveAudioPathForUpload(rootRealPath: string, inputPath: string): Promise<ResolvedUploadPath> {
-  return resolveFilePathForUpload(rootRealPath, inputPath, {
-    emptyPathError: "Usage: /sendaudio <relative-path-under-data-root>",
-    maxBytes: MAX_TELEGRAM_AUDIO_BYTES,
-    tooLargeErrorPrefix: "File too large for Telegram audio upload",
-  });
-}
-
-async function resolveDocumentPathForUpload(rootRealPath: string, inputPath: string): Promise<ResolvedUploadPath> {
-  return resolveFilePathForUpload(rootRealPath, inputPath, {
-    emptyPathError: "Document path is empty",
-    maxBytes: MAX_TELEGRAM_DOCUMENT_BYTES,
-    tooLargeErrorPrefix: "File too large for Telegram document upload",
-  });
-}
-
-async function relocateGeneratedDocumentIfNeeded(rootRealPath: string, resolvedPath: ResolvedUploadPath): Promise<ResolvedUploadPath> {
-  if (!resolvedPath.relativePath.startsWith("attachments/") || !path.basename(resolvedPath.relativePath).includes("scannerizzato")) {
-    return resolvedPath;
-  }
-
-  const now = new Date();
-  const dateFolder = path.join(
-    String(now.getUTCFullYear()),
-    String(now.getUTCMonth() + 1).padStart(2, "0"),
-    String(now.getUTCDate()).padStart(2, "0"),
-  );
-  const generatedFolder = path.join(rootRealPath, GENERATED_SCANNED_PDFS_RELATIVE_DIR, dateFolder);
-  await mkdir(generatedFolder, { recursive: true });
-  const targetPath = path.join(generatedFolder, path.basename(resolvedPath.relativePath));
-  await rename(resolvedPath.realPath, targetPath);
-  const realPath = await realpath(targetPath);
-  return {
-    realPath,
-    relativePath: path.relative(rootRealPath, realPath),
-  };
-}
-
-async function sendTaggedDocuments(
-  telegram: TelegramAdapter,
-  logger: Logger,
-  rootRealPath: string,
-  update: { updateId: number; userId: number; chatId: number },
-  documentPaths: string[],
-): Promise<string[]> {
-  if (documentPaths.length === 0) {
-    return [];
-  }
-
-  const warnings: string[] = [];
-  for (const documentPath of documentPaths) {
-    try {
-      const resolvedPath = await resolveDocumentPathForUpload(rootRealPath, documentPath);
-      const uploadPath = await relocateGeneratedDocumentIfNeeded(rootRealPath, resolvedPath);
-      const documentBlob = Bun.file(uploadPath.realPath);
-      await telegram.sendDocument(update.chatId, documentBlob, path.basename(uploadPath.relativePath), `File: ${uploadPath.relativePath}`);
-      logger.info("telegram_document_sent", {
-        updateId: update.updateId,
-        userId: update.userId,
-        chatId: update.chatId,
-        filePath: uploadPath.relativePath,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.warn("telegram_document_send_failed", {
-        updateId: update.updateId,
-        userId: update.userId,
-        chatId: update.chatId,
-        message,
-        documentPath,
-      });
-      warnings.push(`Documento non inviato (${message}).`);
-    }
-  }
-
-  return warnings;
-}
 
 function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
@@ -301,94 +188,6 @@ async function runWithTypingAndTimeout<T>(params: {
     controller.abort();
     await typingLoop;
   }
-}
-
-async function dispatchAssistantReply(params: {
-  telegram: TelegramAdapter;
-  logger: Logger;
-  tts: ElevenLabsTts | null;
-  rootRealPath: string;
-  update: { updateId: number; userId: number; chatId: number };
-  rawReply: string;
-  noTtsPrefix?: string;
-  forceAudio?: boolean;
-  logContext?: { command?: string };
-  onTextSent?: (text: string) => Promise<void>;
-}): Promise<void> {
-  const parsed = parseTelegramResponse(params.rawReply);
-  const warnings = await sendTaggedDocuments(
-    params.telegram,
-    params.logger,
-    params.rootRealPath,
-    params.update,
-    parsed.documentPaths,
-  );
-  const warningPrefix = warnings.length > 0 ? `${warnings.join("\n")}\n\n` : "";
-  const messageText = `${warningPrefix}${parsed.text}`.trim();
-  const outbound = messageText.slice(0, 4000);
-  const wantsAudio = params.forceAudio || parsed.mode === "audio";
-
-  if (wantsAudio && params.tts) {
-    try {
-      const audioBlob = await params.tts.synthesize(outbound);
-      await params.telegram.sendAudio(params.update.chatId, audioBlob, `reply-${params.update.updateId}.mp3`);
-      await params.onTextSent?.(`audio reply: ${previewText(outbound, 120)}`);
-      params.logger.info("telegram_audio_reply_sent", {
-        updateId: params.update.updateId,
-        userId: params.update.userId,
-        chatId: params.update.chatId,
-        textLength: outbound.length,
-        textPreview: previewText(outbound),
-        mode: wantsAudio ? "audio" : parsed.mode,
-        ...params.logContext,
-      });
-      return;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      params.logger.warn("telegram_audio_reply_failed", {
-        updateId: params.update.updateId,
-        userId: params.update.userId,
-        chatId: params.update.chatId,
-        message,
-        mode: wantsAudio ? "audio" : parsed.mode,
-        ...params.logContext,
-      });
-      await sendTelegramTextReply({
-        telegram: params.telegram,
-        logger: params.logger,
-        update: params.update,
-        text: outbound,
-        command: params.logContext?.command,
-        extraLogFields: { mode: "text_fallback" },
-        onSentText: params.onTextSent,
-      });
-      return;
-    }
-  }
-
-  if (wantsAudio && !params.tts && params.noTtsPrefix) {
-    const fallback = `${params.noTtsPrefix}\n\n${outbound}`.slice(0, 4000);
-    await sendTelegramTextReply({
-      telegram: params.telegram,
-      logger: params.logger,
-      update: params.update,
-      text: fallback,
-      command: params.logContext?.command,
-      extraLogFields: { mode: "text_fallback_no_tts" },
-      onSentText: params.onTextSent,
-    });
-    return;
-  }
-
-  await sendTelegramTextReply({
-    telegram: params.telegram,
-    logger: params.logger,
-    update: params.update,
-    text: outbound,
-    command: params.logContext?.command,
-    extraLogFields: { mode: parsed.mode },
-    onSentText: params.onTextSent,
-  });
 }
 
 async function main(): Promise<void> {
@@ -486,19 +285,12 @@ async function main(): Promise<void> {
     }
   }
   const lastPromptByUser = new Map<number, string>();
-  let heartbeatInFlight = false;
-  let heartbeatLastRunAt = stateStore.getRuntimeValue("heartbeat_last_run_at");
-  let heartbeatLastResult =
-    (stateStore.getRuntimeValue("heartbeat_last_result") as
-      | "never"
-      | "ok"
-      | "ok_notice_sent"
-      | "checkin_sent"
-      | "checkin_dropped"
-      | "alert_sent"
-      | "alert_dropped"
-      | "skipped_inflight"
-      | null) ?? "never";
+  const quietHours = parseQuietHours(config.heartbeatQuietHours ?? "22:00-06:00");
+  let heartbeatStateResolver = () => ({
+    heartbeatInFlight: false,
+    heartbeatLastRunAt: stateStore.getRuntimeValue("heartbeat_last_run_at"),
+    heartbeatLastResult: stateStore.getRuntimeValue("heartbeat_last_result") ?? "never",
+  });
 
   const readHeartbeatDoc = async (): Promise<string | null> => {
     const heartbeatPath = `${config.dataRoot}/${HEARTBEAT_FILE_NAME}`;
@@ -574,6 +366,7 @@ async function main(): Promise<void> {
   };
 
   const buildHeartbeatRuntimeStatus = async (): Promise<string> => {
+    const heartbeatState = heartbeatStateResolver();
     const nowMs = Date.now();
     const localNow = new Date(nowMs);
     const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown";
@@ -615,9 +408,11 @@ async function main(): Promise<void> {
       `Uptime: ${formatDuration(nowMs - startedAtMs)}`,
       `Handled messages: ${handledMessages}`,
       `Failed messages: ${failedMessages}`,
-      `Heartbeat in flight: ${heartbeatInFlight ? "yes" : "no"}`,
-      `Heartbeat last run: ${heartbeatLastRunAt ?? "n/a"}`,
-      `Heartbeat last result: ${heartbeatLastResult}`,
+      `Heartbeat in flight: ${heartbeatState.heartbeatInFlight ? "yes" : "no"}`,
+      `Heartbeat last run: ${heartbeatState.heartbeatLastRunAt ?? "n/a"}`,
+      `Heartbeat last result: ${heartbeatState.heartbeatLastResult}`,
+      `Heartbeat quiet hours: ${heartbeatRunner.getQuietHoursRaw() ?? "disabled"}`,
+      `Heartbeat now in quiet hours: ${heartbeatRunner.isInQuietHours() ? "yes" : "no"}`,
       `Last telegram message at: ${lastTelegramAt}`,
       `Idle since last telegram message: ${idle}`,
       `Last telegram message summary: ${lastTelegramMessageSummary}`,
@@ -632,109 +427,37 @@ async function main(): Promise<void> {
     ].join("\n");
   };
 
-  const runScheduledHeartbeat = async (
-    trigger: "timer" | "manual",
-  ): Promise<{
-    status:
-      | "ok"
-      | "ok_notice_sent"
-      | "checkin_sent"
-      | "checkin_dropped"
-      | "alert_sent"
-      | "alert_dropped"
-      | "skipped_inflight";
-    requestId?: string;
-  }> => {
-    if (heartbeatInFlight) {
-      logger.warn("heartbeat_skipped_inflight");
-      heartbeatLastResult = "skipped_inflight";
-      stateStore.setRuntimeValue("heartbeat_last_result", heartbeatLastResult);
-      logger.debug("state_store_runtime_value_written", {
-        key: "heartbeat_last_result",
-        value: heartbeatLastResult,
-      });
-      return { status: "skipped_inflight" };
-    }
-
-    heartbeatInFlight = true;
-    heartbeatLastRunAt = new Date().toISOString();
-    stateStore.setRuntimeValue("heartbeat_last_run_at", heartbeatLastRunAt);
-    logger.debug("state_store_runtime_value_written", {
-      key: "heartbeat_last_run_at",
-      value: heartbeatLastRunAt,
-    });
-    const requestId = `heartbeat-${Date.now()}`;
-    try {
-      const runtimeStatus = await buildHeartbeatRuntimeStatus();
-      const cycleResult = await runHeartbeatCycle({
-        logger,
-        readHeartbeatDoc,
-        runHeartbeatPrompt: async ({ prompt, requestId: cycleRequestId }) =>
-          runHeartbeatPromptWithTimeout(`${prompt}\n\n${runtimeStatus}`, cycleRequestId),
-        getAlertChatId: () => lastAuthorizedChatId,
-        sendAlert: async (chatId, message) => {
-          const fingerprint = createHash("sha1").update(message.trim()).digest("hex");
-          const nowMs = Date.now();
-          const nowIso = new Date(nowMs).toISOString();
-          const lastFingerprint = stateStore.getRuntimeValue("heartbeat_last_alert_fingerprint");
-          const lastAlertAt = stateStore.getRuntimeValue("heartbeat_last_alert_at");
-          if (trigger === "timer" && shouldDeduplicateHeartbeatMessage({
-            lastFingerprint,
-            lastSentAtIso: lastAlertAt,
-            nextFingerprint: fingerprint,
-            nowMs,
-            dedupWindowMs: HEARTBEAT_ALERT_DEDUP_WINDOW_MS,
-          })) {
-            logger.info("heartbeat_alert_deduplicated", {
-              chatId,
-              fingerprint,
-              lastAlertAt,
-              dedupWindowMs: HEARTBEAT_ALERT_DEDUP_WINDOW_MS,
-            });
-            return "dropped";
-          }
-          await telegram.sendMessage(chatId, message);
-          await recordRecentTelegramEntry("assistant", `heartbeat alert: ${previewText(message, 120)}`);
-          stateStore.setRuntimeValue("heartbeat_last_alert_fingerprint", fingerprint);
-          stateStore.setRuntimeValue("heartbeat_last_alert_at", nowIso);
-          logger.debug("state_store_runtime_value_written", {
-            key: "heartbeat_last_alert_fingerprint",
-            value: fingerprint,
-          });
-          logger.debug("state_store_runtime_value_written", {
-            key: "heartbeat_last_alert_at",
-            value: nowIso,
-          });
-          return "sent";
-        },
-        requestId,
-      });
-      heartbeatLastResult = cycleResult.status;
-      stateStore.setRuntimeValue("heartbeat_last_result", heartbeatLastResult);
-      logger.debug("state_store_runtime_value_written", {
-        key: "heartbeat_last_result",
-        value: heartbeatLastResult,
-      });
-      logger.info("heartbeat_finished", { trigger, requestId, status: cycleResult.status });
-      return { status: cycleResult.status, requestId };
-    } finally {
-      heartbeatInFlight = false;
-    }
-  };
+  const heartbeatRunner = createHeartbeatRunner({
+    logger,
+    stateStore,
+    readHeartbeatDoc,
+    runHeartbeatPromptWithTimeout,
+    buildHeartbeatRuntimeStatus,
+    getAlertChatId: () => lastAuthorizedChatId,
+    sendAlertMessage: (chatId, message) => telegram.sendMessage(chatId, message),
+    recordRecentTelegramEntry,
+    previewText,
+    dedupWindowMs: HEARTBEAT_ALERT_DEDUP_WINDOW_MS,
+    quietHours,
+  });
+  heartbeatStateResolver = heartbeatRunner.getHeartbeatState;
 
   setInterval(() => {
-    void runScheduledHeartbeat("timer");
+    void heartbeatRunner.runScheduledHeartbeat("timer");
   }, HEARTBEAT_INTERVAL_MS);
   logger.info("heartbeat_loop_started", {
     intervalMs: HEARTBEAT_INTERVAL_MS,
     filePath: `${config.dataRoot}/${HEARTBEAT_FILE_NAME}`,
   });
 
-  while (true) {
-    try {
-      const updates = await telegram.getUpdates(offset, config.telegramPollTimeoutSeconds);
-      for (const update of updates) {
-        offset = Math.max(offset, update.updateId + 1);
+  await startTelegramUpdateLoop({
+    telegram,
+    pollTimeoutSeconds: config.telegramPollTimeoutSeconds,
+    getOffset: () => offset,
+    setOffset: (nextOffset) => {
+      offset = nextOffset;
+    },
+    processUpdate: async (update) => {
         if (allowlist.isAllowed(update.userId)) {
           lastAuthorizedChatId = update.chatId;
           lastAuthorizedUserId = update.userId;
@@ -804,6 +527,7 @@ async function main(): Promise<void> {
           isAllowed: (userId) => allowlist.isAllowed(userId),
           sendCommandReply,
           getStatusReply: () => {
+            const heartbeatState = heartbeatRunner.getHeartbeatState();
             const uptime = formatDuration(Date.now() - startedAtMs);
             const idle = lastTelegramMessageAtMs === null ? "n/a" : formatDuration(Date.now() - lastTelegramMessageAtMs);
             const lastTelegramAt = lastTelegramMessageAtMs === null ? "n/a" : new Date(lastTelegramMessageAtMs).toISOString();
@@ -816,9 +540,11 @@ async function main(): Promise<void> {
               `Backend command: ${config.codexCommand}`,
               `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
               `Heartbeat interval: ${Math.floor(HEARTBEAT_INTERVAL_MS / 60000)}m`,
-              `Heartbeat running: ${heartbeatInFlight ? "yes" : "no"}`,
-              `Heartbeat last run: ${heartbeatLastRunAt ?? "n/a"}`,
-              `Heartbeat last result: ${heartbeatLastResult}`,
+              `Heartbeat running: ${heartbeatState.heartbeatInFlight ? "yes" : "no"}`,
+              `Heartbeat last run: ${heartbeatState.heartbeatLastRunAt ?? "n/a"}`,
+              `Heartbeat last result: ${heartbeatState.heartbeatLastResult}`,
+              `Heartbeat quiet hours: ${heartbeatRunner.getQuietHoursRaw() ?? "disabled"}`,
+              `Heartbeat now in quiet hours: ${heartbeatRunner.isInQuietHours() ? "yes" : "no"}`,
               `Last telegram message at: ${lastTelegramAt}`,
               `Idle since last telegram message: ${idle}`,
               `Last telegram message summary: ${lastTelegramMessageSummary}`,
@@ -867,8 +593,7 @@ async function main(): Promise<void> {
             recentTelegramMessages.splice(0, recentTelegramMessages.length);
             lastTelegramMessageAtMs = null;
             lastTelegramMessageSummary = "n/a";
-            heartbeatLastRunAt = null;
-            heartbeatLastResult = "never";
+            heartbeatRunner.resetHeartbeatState();
             try {
               stateStore.clearRecentMessages();
               logger.debug("state_store_recent_messages_cleared");
@@ -908,13 +633,19 @@ async function main(): Promise<void> {
               noTtsPrefix: options.noTtsPrefix,
               forceAudio: options.forceAudio,
               logContext: { command: options.command },
+              maxTelegramDocumentBytes: MAX_TELEGRAM_DOCUMENT_BYTES,
+              generatedScannedPdfsRelativeDir: GENERATED_SCANNED_PDFS_RELATIVE_DIR,
               onTextSent: async (text) => {
                 await recordRecentTelegramEntry("assistant", text);
               },
             });
           },
           sendAudioFile: async (inputPath: string) => {
-            const { realPath, relativePath } = await resolveAudioPathForUpload(dataRootRealPath, inputPath);
+            const { realPath, relativePath } = await resolveAudioPathForUpload(
+              dataRootRealPath,
+              inputPath,
+              MAX_TELEGRAM_AUDIO_BYTES,
+            );
             const fileBlob = Bun.file(realPath);
             await telegram.sendAudio(update.chatId, fileBlob, path.basename(relativePath), `File: ${relativePath}`);
             logger.info("telegram_audio_sent", {
@@ -926,7 +657,7 @@ async function main(): Promise<void> {
             return relativePath;
           },
           runHeartbeatNow: async () => {
-            const outcome = await runScheduledHeartbeat("manual");
+            const outcome = await heartbeatRunner.runScheduledHeartbeat("manual");
             if (outcome.status === "skipped_inflight") {
               return "Heartbeat gia in esecuzione.";
             }
@@ -949,7 +680,7 @@ async function main(): Promise<void> {
           },
         });
         if (commandHandled) {
-          continue;
+          return;
         }
 
         let reply: string;
@@ -965,7 +696,7 @@ async function main(): Promise<void> {
               await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
             },
           });
-          continue;
+          return;
         }
 
         const result = await runAgentRequestWithTimeout({
@@ -1062,17 +793,19 @@ async function main(): Promise<void> {
           rootRealPath: dataRootRealPath,
           update,
           rawReply: reply,
+          maxTelegramDocumentBytes: MAX_TELEGRAM_DOCUMENT_BYTES,
+          generatedScannedPdfsRelativeDir: GENERATED_SCANNED_PDFS_RELATIVE_DIR,
           onTextSent: async (text) => {
             await recordRecentTelegramEntry("assistant", text);
           },
         });
-      }
-    } catch (error) {
+    },
+    onPollError: async (error) => {
       const message = error instanceof Error ? error.message : "Unknown error";
       logger.error("telegram_poll_failed", { message });
       await Bun.sleep(2000);
-    }
-  }
+    },
+  });
 }
 
 main().catch((error) => {

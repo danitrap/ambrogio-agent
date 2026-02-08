@@ -155,6 +155,8 @@ export async function runHeartbeatCycle(params: {
   getAlertChatId: () => number | null;
   sendAlert: (chatId: number, message: string) => Promise<"sent" | "dropped">;
   requestId: string;
+  trigger?: "timer" | "manual";
+  shouldSuppressCheckin?: () => boolean;
 }): Promise<HeartbeatCycleResult> {
   let heartbeatDoc: string | null = null;
 
@@ -194,6 +196,10 @@ export async function runHeartbeatCycle(params: {
     const normalized = response.trim();
     const reason = decision ? formatDecisionMessage(decision) : (normalized.length > 0 ? normalized : "Empty heartbeat response.");
     const action = decision?.action ?? "alert";
+    if (action === "checkin" && params.trigger === "timer" && params.shouldSuppressCheckin?.()) {
+      params.logger.info("heartbeat_checkin_suppressed_quiet_hours", { requestId: params.requestId });
+      return { status: "checkin_dropped" };
+    }
     const outbound = action === "checkin" ? formatCheckinMessage(reason) : formatAlertMessage(reason);
     const chatId = params.getAlertChatId();
     if (chatId === null) {

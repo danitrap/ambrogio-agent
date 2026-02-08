@@ -26,6 +26,7 @@ export type AppConfig = {
   codexArgs: string[];
   logLevel: LogLevel;
   telegramPollTimeoutSeconds: number;
+  heartbeatQuietHours: string | null;
 };
 
 export function loadConfig(): AppConfig {
@@ -45,5 +46,6 @@ export function loadConfig(): AppConfig {
     codexArgs,
     logLevel,
     telegramPollTimeoutSeconds: parseNumber(Bun.env.TELEGRAM_POLL_TIMEOUT_SECONDS ?? "20", "TELEGRAM_POLL_TIMEOUT_SECONDS"),
+    heartbeatQuietHours: Bun.env.HEARTBEAT_QUIET_HOURS?.trim() || null,
   };
 }

@@ -1,4 +1,5 @@
 import type { Logger } from "../logging/audit";
+import { correlationFields } from "../logging/correlation";
 import type { TelegramAdapter } from "../telegram/adapter";
 
 const TELEGRAM_MESSAGE_LIMIT = 4000;
@@ -24,12 +25,14 @@ export async function sendTelegramTextReply(params: {
   await params.telegram.sendMessage(params.update.chatId, outbound);
   await params.onSentText?.(outbound);
   params.logger.info("telegram_message_sent", {
-    updateId: params.update.updateId,
-    userId: params.update.userId,
-    chatId: params.update.chatId,
+    ...correlationFields({
+      updateId: params.update.updateId,
+      userId: params.update.userId,
+      chatId: params.update.chatId,
+      command: params.command,
+    }),
     textLength: outbound.length,
     textPreview: previewText(outbound),
-    ...(params.command ? { command: params.command } : {}),
     ...(params.extraLogFields ?? {}),
   });
 }

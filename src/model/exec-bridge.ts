@@ -1,4 +1,5 @@
 import type { Logger } from "../logging/audit";
+import { correlationFields } from "../logging/correlation";
 import type { ModelBridge, ModelExecutionSummary, ModelRequest, ModelResponse } from "./types";
 import { readFile, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -98,7 +99,7 @@ export class ExecBridge implements ModelBridge {
       promptLength: prompt.length,
     };
     this.logger.info("codex_exec_started", {
-      requestId,
+      ...correlationFields({ requestId }),
       command: execCommand,
       args: execArgs,
       cwd: this.cwd ?? this.rootDir,
@@ -160,7 +161,7 @@ export class ExecBridge implements ModelBridge {
       const stdout = (await stdoutPromise).trim();
 
       this.logger.info("codex_exec_streams", {
-        requestId,
+        ...correlationFields({ requestId }),
         command: execCommand,
         exitCode,
         stdout,
@@ -184,7 +185,7 @@ export class ExecBridge implements ModelBridge {
 
       if (exitCode !== 0) {
         this.logger.error("exec_command_failed", {
-          requestId,
+          ...correlationFields({ requestId }),
           command: execCommand,
           exitCode,
           stderr,
@@ -198,7 +199,7 @@ export class ExecBridge implements ModelBridge {
       if (!text) {
         const durationMs = Date.now() - startedAt;
         this.logger.warn("codex_exec_empty_output", {
-          requestId,
+          ...correlationFields({ requestId }),
           command: execCommand,
           exitCode,
           durationMs,
@@ -226,7 +227,7 @@ export class ExecBridge implements ModelBridge {
       const responseText = unwrapFinalTags(text);
       const durationMs = Date.now() - startedAt;
       this.logger.info("codex_exec_completed", {
-        requestId,
+        ...correlationFields({ requestId }),
         command: execCommand,
         exitCode,
         durationMs,
@@ -260,7 +261,7 @@ export class ExecBridge implements ModelBridge {
       const durationMs = Date.now() - startedAt;
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error("codex_exec_streams_error", {
-        requestId,
+        ...correlationFields({ requestId }),
         command: execCommand,
         stdout,
         stderr,
@@ -268,7 +269,7 @@ export class ExecBridge implements ModelBridge {
         stderrLength: stderr.length,
       });
       this.logger.error("exec_command_error", {
-        requestId,
+        ...correlationFields({ requestId }),
         command: execCommand,
         message,
         stderr,

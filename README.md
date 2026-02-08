@@ -32,6 +32,7 @@ cp .env.example .env
 - `OPENAI_API_KEY`
 - `CODEX_COMMAND` (default: `codex`)
 - `CODEX_ARGS` (default: `--dangerously-bypass-approvals-and-sandbox -c instructions=codex_fs` inside this containerized setup)
+- `HEARTBEAT_QUIET_HOURS` (default suggested: `22:00-06:00`, local timezone; suppresses only timer check-ins)
 
 4. Start:
 ```bash
@@ -74,6 +75,7 @@ The agent runs a dedicated heartbeat every 30 minutes (fixed interval, no config
 - If action is needed, expected output is JSON:
   - `{"action":"checkin|alert","issue":"...","impact":"...","nextStep":"...","todoItems":["..."]}`
 - `checkin` and `alert` are different outbound messages.
+- Quiet hours can suppress timer-triggered `checkin` messages (alerts are never suppressed) via `HEARTBEAT_QUIET_HOURS`.
 - Repeated timer-triggered heartbeat messages are deduplicated for 4 hours using persisted SQLite runtime keys.
 - If heartbeat execution fails, it sends a Telegram alert.
 - Alerts are sent to the most recent authorized chat seen at runtime.

@@ -1,4 +1,5 @@
 import type { Logger } from "../logging/audit";
+import { correlationFields } from "../logging/correlation";
 
 export type RequestContext = {
   updateId: number;
@@ -24,11 +25,13 @@ export async function runAgentRequestWithTimeout(params: {
   } catch (error) {
     if (error instanceof Error && error.message === "MODEL_TIMEOUT") {
       params.logger.error("request_timed_out", {
-        updateId: params.update.updateId,
-        userId: params.update.userId,
-        chatId: params.update.chatId,
+        ...correlationFields({
+          updateId: params.update.updateId,
+          userId: params.update.userId,
+          chatId: params.update.chatId,
+          command: params.command,
+        }),
         timeoutMs: params.timeoutMs,
-        ...(params.command ? { command: params.command } : {}),
       });
       return {
         reply: "Model backend unavailable right now. Riprova tra poco.",
@@ -39,8 +42,12 @@ export async function runAgentRequestWithTimeout(params: {
     const message = error instanceof Error ? error.message : "Unknown error";
     params.logger.error("message_processing_failed", {
       message,
-      userId: params.update.userId,
-      ...(params.command ? { command: params.command } : {}),
+      ...correlationFields({
+        updateId: params.update.updateId,
+        userId: params.update.userId,
+        chatId: params.update.chatId,
+        command: params.command,
+      }),
     });
     return {
       reply: `Error: ${message}`,
