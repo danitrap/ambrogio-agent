@@ -8,8 +8,8 @@ Personal-only agent wrapper for Telegram with a secure `/data` boundary and Agen
 - Telegram vocal message support with transcription (`gpt-4o-mini-transcribe`)
 - Optional audio replies via ElevenLabs TTS with `/audio <prompt>` when `ELEVENLABS_API_KEY` is set
 - Single-user allowlist (`TELEGRAM_ALLOWED_USER_ID`)
-- Agent Skills-compatible discovery from `/data/skills/*/SKILL.md`
-- Bootstrap automatico delle skill versionate in `./skills` verso `/data/skills` (solo mancanti)
+- Agent Skills-compatible discovery from `/data/.codex/skills/*/SKILL.md`
+- Bootstrap automatico delle skill versionate in `./skills` verso `/data/.codex/skills` (solo mancanti)
 - Docker hardening baseline (`read_only`, `cap_drop=ALL`, `no-new-privileges`)
 - Backend-tools-only mode via `codex exec` (no local fallback execution).
 - Minimal heartbeat loop every 30 minutes with `HEARTBEAT_OK` silent mode, explicit `checkin|alert` actions, and Telegram delivery with dedup.
@@ -99,8 +99,8 @@ Le skill che vuoi portare tra host vanno versionate nel repository:
 
 - `skills/<skill-id>/SKILL.md`
 
-All'avvio, il processo copia automaticamente le skill mancanti da `./skills` a `/data/skills`.
-Le skill già presenti in `/data/skills` non vengono sovrascritte (idempotente e non distruttivo).
+All'avvio, il processo copia automaticamente le skill mancanti da `./skills` a `/data/.codex/skills`.
+Le skill già presenti in `/data/.codex/skills` non vengono sovrascritte (idempotente e non distruttivo).
 
 Se serve, puoi cambiare sorgente con `PROJECT_SKILLS_ROOT`.
 

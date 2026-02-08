@@ -406,15 +406,15 @@ async function main(): Promise<void> {
   const dataRootRealPath = await realpath(config.dataRoot);
 
   const projectSkillsRoot = Bun.env.PROJECT_SKILLS_ROOT ?? path.resolve(import.meta.dir, "..", "skills");
-  const dataSkillsRoot = `${config.dataRoot}/skills`;
+  const codexSkillsRoot = `${codexHome}/skills`;
   const bootstrapResult = await bootstrapProjectSkills({
     sourceRoot: projectSkillsRoot,
-    destinationRoot: dataSkillsRoot,
+    destinationRoot: codexSkillsRoot,
   });
   if (bootstrapResult.copied.length > 0 || bootstrapResult.skipped.length > 0) {
     logger.info("skills_bootstrap_completed", {
       sourceRoot: projectSkillsRoot,
-      destinationRoot: dataSkillsRoot,
+      destinationRoot: codexSkillsRoot,
       copiedCount: bootstrapResult.copied.length,
       skippedCount: bootstrapResult.skipped.length,
       copied: bootstrapResult.copied,
@@ -422,10 +422,7 @@ async function main(): Promise<void> {
     });
   }
 
-  const skills = new SkillDiscovery([
-    dataSkillsRoot,
-    `${codexHome}/skills`,
-  ]);
+  const skills = new SkillDiscovery(codexSkillsRoot);
   const modelBridge = new ExecBridge(config.codexCommand, config.codexArgs, logger, {
     cwd: config.dataRoot,
     env: {
@@ -840,7 +837,7 @@ async function main(): Promise<void> {
           getSkillsReply: async () => {
             const discovered = await skills.discover();
             if (discovered.length === 0) {
-              return "Nessuna skill disponibile in /data/skills o /data/.codex/skills.";
+              return "Nessuna skill disponibile in /data/.codex/skills.";
             }
             const lines = [
               "Skills disponibili:",
