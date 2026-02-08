@@ -24,7 +24,7 @@ export class AgentService {
 
   constructor(private readonly deps: AgentDependencies) {}
 
-  async handleMessage(userId: number, text: string, requestId?: string): Promise<string> {
+  async handleMessage(userId: number, text: string, requestId?: string, signal?: AbortSignal): Promise<string> {
     if (!this.deps.allowlist.isAllowed(userId)) {
       this.deps.logger.warn("unauthorized_user", { userId });
       return "Unauthorized user.";
@@ -41,6 +41,7 @@ export class AgentService {
       requestId,
       message: contextualMessage,
       skills: hydrated,
+      signal,
     });
 
     const operationLogs: string[] = [];

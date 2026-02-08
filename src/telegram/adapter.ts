@@ -26,7 +26,7 @@ export class TelegramAdapter {
   private readonly baseUrl: string;
   private readonly fileBaseUrl: string;
 
-  constructor(private readonly botToken: string) {
+  constructor(botToken: string) {
     this.baseUrl = `https://api.telegram.org/bot${botToken}`;
     this.fileBaseUrl = `https://api.telegram.org/file/bot${botToken}`;
   }

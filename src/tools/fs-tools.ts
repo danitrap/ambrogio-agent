@@ -164,6 +164,10 @@ export class FsTools {
         if ((error as Error).message.startsWith("Hash mismatch")) {
           throw error;
         }
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") {
+          throw error;
+        }
       }
     }
 

@@ -6,7 +6,6 @@ import { resolve } from "node:path";
 type BridgeOptions = {
   cwd?: string;
   env?: Record<string, string>;
-  timeoutMs?: number;
 };
 
 function previewLogText(value: string, max = 240): string {
@@ -57,7 +56,6 @@ export class CodexAcpBridge implements ModelBridge {
   private readonly cwd?: string;
   private readonly rootDir: string;
   private readonly envOverrides?: Record<string, string>;
-  private readonly timeoutMs: number;
   private lastExecutionSummary: ModelExecutionSummary | null = null;
 
   constructor(
@@ -69,7 +67,6 @@ export class CodexAcpBridge implements ModelBridge {
     this.cwd = options.cwd;
     this.rootDir = resolve(options.cwd ?? process.cwd());
     this.envOverrides = options.env;
-    this.timeoutMs = options.timeoutMs ?? 60_000;
   }
 
   private resolveExecCommand(): string {
@@ -122,6 +119,21 @@ export class CodexAcpBridge implements ModelBridge {
         NO_COLOR: Bun.env.NO_COLOR ?? "1",
       },
     });
+    const abortSignal = request.signal;
+    const abortHandler = () => {
+      try {
+        process.kill();
+      } catch {
+        // Ignore kill issues when process already ended.
+      }
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        abortHandler();
+      } else {
+        abortSignal.addEventListener("abort", abortHandler, { once: true });
+      }
+    }
 
     const stdinSink = process.stdin;
     const stdoutStream = process.stdout;
@@ -276,6 +288,10 @@ export class CodexAcpBridge implements ModelBridge {
         errorMessage: message,
       };
       return { text: "Model backend unavailable right now.", toolCalls: [] };
+    } finally {
+      if (abortSignal) {
+        abortSignal.removeEventListener("abort", abortHandler);
+      }
     }
   }
 

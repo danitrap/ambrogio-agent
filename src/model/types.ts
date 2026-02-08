@@ -9,6 +9,7 @@ export type ModelRequest = {
   requestId?: string;
   message: string;
   skills: HydratedSkill[];
+  signal?: AbortSignal;
 };
 
 export type ModelResponse = {

@@ -68,4 +68,14 @@ describe("FsTools", () => {
     const finalContent = await readFile(path.join(root, "item.txt"), "utf8");
     expect(finalContent).toBe("v1");
   });
+
+  test("fails overwrite when expected hash check cannot read existing target", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agent-fs-"));
+    await mkdir(path.join(root, "target"), { recursive: true });
+
+    const tools = new FsTools({ root });
+    await tools.init();
+
+    await expect(tools.writeFile("target", "v2", "any-hash")).rejects.toThrow();
+  });
 });

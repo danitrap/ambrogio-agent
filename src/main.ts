@@ -32,10 +32,6 @@ function previewText(value: string, max = 160): string {
   return `${normalized.slice(0, max)}...`;
 }
 
-function isClearCommand(text: string): boolean {
-  return /^\/clear(?:@\w+)?(?:\s+.*)?$/i.test(text.trim());
-}
-
 function formatDuration(ms: number): string {
   if (ms < 1000) {
     return `${ms}ms`;
@@ -253,10 +249,11 @@ async function startTypingLoop(
   logger.info("typing_stopped", { updateId, userId, chatId });
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout?: () => void): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<T>((_, reject) => {
     timeout = setTimeout(() => {
+      onTimeout?.();
       reject(new Error("MODEL_TIMEOUT"));
     }, timeoutMs);
   });
@@ -277,7 +274,7 @@ async function runWithTypingAndTimeout<T>(params: {
   updateId: number;
   userId: number;
   timeoutMs: number;
-  operation: () => Promise<T>;
+  operation: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   const controller = new AbortController();
   const typingLoop = startTypingLoop(
@@ -290,7 +287,9 @@ async function runWithTypingAndTimeout<T>(params: {
   );
 
   try {
-    return await withTimeout(params.operation(), params.timeoutMs);
+    return await withTimeout(params.operation(controller.signal), params.timeoutMs, () => {
+      controller.abort();
+    });
   } finally {
     controller.abort();
     await typingLoop;
@@ -572,7 +571,7 @@ async function main(): Promise<void> {
                   updateId: update.updateId,
                   userId: update.userId,
                   timeoutMs: MODEL_TIMEOUT_MS,
-                  operation: () => agent.handleMessage(update.userId, lastPrompt, String(update.updateId)),
+                  operation: (signal) => agent.handleMessage(update.userId, lastPrompt, String(update.updateId), signal),
                 });
                 handledMessages += 1;
               } catch (error) {
@@ -619,7 +618,7 @@ async function main(): Promise<void> {
                   updateId: update.updateId,
                   userId: update.userId,
                   timeoutMs: MODEL_TIMEOUT_MS,
-                  operation: () => agent.handleMessage(update.userId, command.args, String(update.updateId)),
+                  operation: (signal) => agent.handleMessage(update.userId, command.args, String(update.updateId), signal),
                 });
                 handledMessages += 1;
                 lastPromptByUser.set(update.userId, command.args);
@@ -679,44 +678,19 @@ async function main(): Promise<void> {
               continue;
             }
             case "clear":
-              break;
+              agent.clearConversation(update.userId);
+              logger.info("conversation_cleared", {
+                updateId: update.updateId,
+                userId: update.userId,
+                chatId: update.chatId,
+              });
+              await sendCommandReply("Memoria conversazione cancellata.");
+              continue;
             default: {
               await sendCommandReply(`Comando non riconosciuto: /${command.name}. Usa /help.`);
               continue;
             }
           }
-        }
-
-        if (update.text && isClearCommand(update.text)) {
-          if (!allowlist.isAllowed(update.userId)) {
-            const outbound = "Unauthorized user.";
-            await telegram.sendMessage(update.chatId, outbound);
-            logger.info("telegram_message_sent", {
-              updateId: update.updateId,
-              userId: update.userId,
-              chatId: update.chatId,
-              textLength: outbound.length,
-              textPreview: previewText(outbound),
-            });
-            continue;
-          }
-
-          agent.clearConversation(update.userId);
-          logger.info("conversation_cleared", {
-            updateId: update.updateId,
-            userId: update.userId,
-            chatId: update.chatId,
-          });
-          const outbound = "Memoria conversazione cancellata.";
-          await telegram.sendMessage(update.chatId, outbound);
-          logger.info("telegram_message_sent", {
-            updateId: update.updateId,
-            userId: update.userId,
-            chatId: update.chatId,
-            textLength: outbound.length,
-            textPreview: previewText(outbound),
-          });
-          continue;
         }
 
         let reply: string;
@@ -743,7 +717,7 @@ async function main(): Promise<void> {
             updateId: update.updateId,
             userId: update.userId,
             timeoutMs: MODEL_TIMEOUT_MS,
-            operation: async () => {
+            operation: async (signal) => {
               const processedAttachments: ProcessedAttachment[] = [];
               for (let index = 0; index < update.attachments.length; index += 1) {
                 const attachment = update.attachments[index];
@@ -805,7 +779,7 @@ async function main(): Promise<void> {
                   : "Posso gestire solo messaggi testuali o vocali.";
               }
 
-              const modelReply = await agent.handleMessage(update.userId, promptText, String(update.updateId));
+              const modelReply = await agent.handleMessage(update.userId, promptText, String(update.updateId), signal);
               handledMessages += 1;
               lastPromptByUser.set(update.userId, promptText);
               return modelReply;
