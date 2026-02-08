@@ -6,17 +6,23 @@ export type ConversationEntry = { role: "user" | "assistant"; text: string };
 export type ConversationStats = { entries: number; userTurns: number; assistantTurns: number; hasContext: boolean };
 export type RecentMessageEntry = { createdAt: string; role: "user" | "assistant"; summary: string };
 export type BackgroundTaskStatus =
+  | "scheduled"
   | "running"
   | "completed_pending_delivery"
   | "completed_delivered"
   | "failed_pending_delivery"
-  | "failed_delivered";
+  | "failed_delivered"
+  | "canceled";
+export type TaskKind = "background" | "delayed";
 export type BackgroundTaskEntry = {
   taskId: string;
+  kind: TaskKind;
   updateId: number;
   userId: number;
   chatId: number;
   command: string | null;
+  payloadPrompt: string | null;
+  runAt: string | null;
   requestPreview: string;
   status: BackgroundTaskStatus;
   createdAt: string;
@@ -32,10 +38,13 @@ type ConversationRow = { role: "user" | "assistant"; text: string };
 type RecentRow = { created_at: string; role: "user" | "assistant"; summary: string };
 type BackgroundTaskRow = {
   task_id: string;
+  kind: TaskKind;
   update_id: number;
   user_id: number;
   chat_id: number;
   command: string | null;
+  payload_prompt: string | null;
+  run_at: string | null;
   request_preview: string;
   status: BackgroundTaskStatus;
   created_at: string;
@@ -81,10 +90,13 @@ export class StateStore {
     this.db.run(`
       CREATE TABLE IF NOT EXISTS background_tasks (
         task_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL DEFAULT 'background',
         update_id INTEGER NOT NULL,
         user_id INTEGER NOT NULL,
         chat_id INTEGER NOT NULL,
         command TEXT,
+        payload_prompt TEXT,
+        run_at TEXT,
         request_preview TEXT NOT NULL,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
@@ -97,6 +109,26 @@ export class StateStore {
       );
     `);
     this.db.run("CREATE INDEX IF NOT EXISTS idx_background_status ON background_tasks(status, updated_at);");
+    this.ensureBackgroundTaskColumns();
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_background_due ON background_tasks(status, run_at);");
+  }
+
+  private ensureBackgroundTaskColumns(): void {
+    try {
+      this.db.run("ALTER TABLE background_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'background'");
+    } catch {
+      // already present
+    }
+    try {
+      this.db.run("ALTER TABLE background_tasks ADD COLUMN payload_prompt TEXT");
+    } catch {
+      // already present
+    }
+    try {
+      this.db.run("ALTER TABLE background_tasks ADD COLUMN run_at TEXT");
+    } catch {
+      // already present
+    }
   }
 
   static async open(dataRoot: string): Promise<StateStore> {
@@ -236,39 +268,184 @@ export class StateStore {
     const now = new Date().toISOString();
     this.db.run(
       `INSERT INTO background_tasks (
-        task_id, update_id, user_id, chat_id, command, request_preview, status,
+        task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
         created_at, updated_at, timed_out_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7, ?7, ?7)`,
-      [params.taskId, params.updateId, params.userId, params.chatId, params.command ?? null, params.requestPreview, now],
+      ) VALUES (?1, 'background', ?2, ?3, ?4, ?5, ?6, NULL, ?7, 'running', ?8, ?8, ?8)`,
+      [
+        params.taskId,
+        params.updateId,
+        params.userId,
+        params.chatId,
+        params.command ?? null,
+        null,
+        params.requestPreview,
+        now,
+      ],
     );
   }
 
-  markBackgroundTaskCompleted(taskId: string, deliveryText: string): void {
+  createScheduledTask(params: {
+    taskId: string;
+    updateId: number;
+    userId: number;
+    chatId: number;
+    command?: string;
+    prompt: string;
+    requestPreview: string;
+    runAt: string;
+  }): void {
     const now = new Date().toISOString();
+    const runAtIso = new Date(params.runAt).toISOString();
     this.db.run(
+      `INSERT INTO background_tasks (
+        task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
+        created_at, updated_at, timed_out_at
+      ) VALUES (?1, 'delayed', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'scheduled', ?9, ?9, ?9)`,
+      [
+        params.taskId,
+        params.updateId,
+        params.userId,
+        params.chatId,
+        params.command ?? null,
+        params.prompt,
+        runAtIso,
+        params.requestPreview,
+        now,
+      ],
+    );
+  }
+
+  claimScheduledTask(taskId: string): boolean {
+    const now = new Date().toISOString();
+    const result = this.db.run(
+      `UPDATE background_tasks
+       SET status = 'running', updated_at = ?2
+       WHERE task_id = ?1 AND status = 'scheduled'`,
+      [taskId, now],
+    );
+    return (result.changes ?? 0) > 0;
+  }
+
+  getDueScheduledTasks(limit = 20): BackgroundTaskEntry[] {
+    const now = new Date().toISOString();
+    const rows = this.db
+      .query(
+        `SELECT task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
+                created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message
+         FROM background_tasks
+         WHERE status = 'scheduled'
+           AND run_at IS NOT NULL
+           AND julianday(run_at) <= julianday(?1)
+         ORDER BY run_at ASC
+         LIMIT ?2`,
+      )
+      .all(now, limit) as BackgroundTaskRow[];
+
+    return rows.map((row) => ({
+      taskId: row.task_id,
+      kind: row.kind,
+      updateId: row.update_id,
+      userId: row.user_id,
+      chatId: row.chat_id,
+      command: row.command,
+      payloadPrompt: row.payload_prompt,
+      runAt: row.run_at,
+      requestPreview: row.request_preview,
+      status: row.status,
+      createdAt: row.created_at,
+      timedOutAt: row.timed_out_at,
+      completedAt: row.completed_at,
+      deliveredAt: row.delivered_at,
+      deliveryText: row.delivery_text,
+      errorMessage: row.error_message,
+    }));
+  }
+
+  getCancelableDelayedTasksForUser(userId: number, chatId: number, limit = 10): BackgroundTaskEntry[] {
+    const rows = this.db
+      .query(
+        `SELECT task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
+                created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message
+         FROM background_tasks
+         WHERE user_id = ?1
+           AND chat_id = ?2
+           AND kind = 'delayed'
+           AND status IN ('scheduled', 'running', 'completed_pending_delivery', 'failed_pending_delivery')
+         ORDER BY created_at DESC
+         LIMIT ?3`,
+      )
+      .all(userId, chatId, limit) as BackgroundTaskRow[];
+
+    return rows.map((row) => ({
+      taskId: row.task_id,
+      kind: row.kind,
+      updateId: row.update_id,
+      userId: row.user_id,
+      chatId: row.chat_id,
+      command: row.command,
+      payloadPrompt: row.payload_prompt,
+      runAt: row.run_at,
+      requestPreview: row.request_preview,
+      status: row.status,
+      createdAt: row.created_at,
+      timedOutAt: row.timed_out_at,
+      completedAt: row.completed_at,
+      deliveredAt: row.delivered_at,
+      deliveryText: row.delivery_text,
+      errorMessage: row.error_message,
+    }));
+  }
+
+  cancelTask(taskId: string): "not_found" | "already_done" | "canceled" {
+    const now = new Date().toISOString();
+    const row = this.db
+      .query("SELECT status FROM background_tasks WHERE task_id = ?1")
+      .get(taskId) as { status: BackgroundTaskStatus } | null;
+    if (!row) {
+      return "not_found";
+    }
+    if (!["scheduled", "running", "completed_pending_delivery", "failed_pending_delivery"].includes(row.status)) {
+      return "already_done";
+    }
+    this.db.run(
+      `UPDATE background_tasks
+       SET status = 'canceled', updated_at = ?2, delivered_at = ?2
+       WHERE task_id = ?1`,
+      [taskId, now],
+    );
+    return "canceled";
+  }
+
+  markBackgroundTaskCompleted(taskId: string, deliveryText: string): boolean {
+    const now = new Date().toISOString();
+    const result = this.db.run(
       `UPDATE background_tasks
        SET status = 'completed_pending_delivery',
            updated_at = ?2,
            completed_at = ?2,
            delivery_text = ?3,
            error_message = NULL
-       WHERE task_id = ?1`,
+       WHERE task_id = ?1
+         AND status = 'running'`,
       [taskId, now, deliveryText],
     );
+    return (result.changes ?? 0) > 0;
   }
 
-  markBackgroundTaskFailed(taskId: string, errorMessage: string, deliveryText: string): void {
+  markBackgroundTaskFailed(taskId: string, errorMessage: string, deliveryText: string): boolean {
     const now = new Date().toISOString();
-    this.db.run(
+    const result = this.db.run(
       `UPDATE background_tasks
        SET status = 'failed_pending_delivery',
            updated_at = ?2,
            completed_at = ?2,
            delivery_text = ?3,
            error_message = ?4
-       WHERE task_id = ?1`,
+       WHERE task_id = ?1
+         AND status = 'running'`,
       [taskId, now, deliveryText, errorMessage],
     );
+    return (result.changes ?? 0) > 0;
   }
 
   markBackgroundTaskDelivered(taskId: string): void {
@@ -291,6 +468,7 @@ export class StateStore {
     const rows = this.db
       .query(
         `SELECT task_id, update_id, user_id, chat_id, command, request_preview, status,
+                kind, payload_prompt, run_at,
                 created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message
          FROM background_tasks
          WHERE status IN ('completed_pending_delivery', 'failed_pending_delivery')
@@ -301,10 +479,13 @@ export class StateStore {
 
     return rows.map((row) => ({
       taskId: row.task_id,
+      kind: row.kind,
       updateId: row.update_id,
       userId: row.user_id,
       chatId: row.chat_id,
       command: row.command,
+      payloadPrompt: row.payload_prompt,
+      runAt: row.run_at,
       requestPreview: row.request_preview,
       status: row.status,
       createdAt: row.created_at,
@@ -320,9 +501,10 @@ export class StateStore {
     const rows = this.db
       .query(
         `SELECT task_id, update_id, user_id, chat_id, command, request_preview, status,
+                kind, payload_prompt, run_at,
                 created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message
          FROM background_tasks
-         WHERE status IN ('running', 'completed_pending_delivery', 'failed_pending_delivery')
+         WHERE status IN ('scheduled', 'running', 'completed_pending_delivery', 'failed_pending_delivery')
          ORDER BY created_at DESC
          LIMIT ?1`,
       )
@@ -330,10 +512,13 @@ export class StateStore {
 
     return rows.map((row) => ({
       taskId: row.task_id,
+      kind: row.kind,
       updateId: row.update_id,
       userId: row.user_id,
       chatId: row.chat_id,
       command: row.command,
+      payloadPrompt: row.payload_prompt,
+      runAt: row.run_at,
       requestPreview: row.request_preview,
       status: row.status,
       createdAt: row.created_at,
@@ -348,7 +533,7 @@ export class StateStore {
   getBackgroundTask(taskId: string): BackgroundTaskEntry | null {
     const row = this.db
       .query(
-        `SELECT task_id, update_id, user_id, chat_id, command, request_preview, status,
+        `SELECT task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
                 created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message
          FROM background_tasks
          WHERE task_id = ?1`,
@@ -360,10 +545,13 @@ export class StateStore {
     }
     return {
       taskId: row.task_id,
+      kind: row.kind,
       updateId: row.update_id,
       userId: row.user_id,
       chatId: row.chat_id,
       command: row.command,
+      payloadPrompt: row.payload_prompt,
+      runAt: row.run_at,
       requestPreview: row.request_preview,
       status: row.status,
       createdAt: row.created_at,
@@ -381,6 +569,17 @@ export class StateStore {
         `SELECT COUNT(*) AS total
          FROM background_tasks
          WHERE status IN ('completed_pending_delivery', 'failed_pending_delivery')`,
+      )
+      .get() as { total: number } | null;
+    return row?.total ?? 0;
+  }
+
+  countScheduledTasks(): number {
+    const row = this.db
+      .query(
+        `SELECT COUNT(*) AS total
+         FROM background_tasks
+         WHERE status = 'scheduled'`,
       )
       .get() as { total: number } | null;
     return row?.total ?? 0;

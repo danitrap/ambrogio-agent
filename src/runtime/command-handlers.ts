@@ -27,6 +27,7 @@ export async function handleTelegramCommand(params: {
   getTasksReply: () => string;
   getTaskReply: (taskId: string) => string;
   retryTaskDelivery: (taskId: string) => Promise<string>;
+  cancelTask: (taskId: string) => Promise<string>;
 }): Promise<boolean> {
   const command = params.command;
   if (!command) {
@@ -56,6 +57,7 @@ export async function handleTelegramCommand(params: {
           "/tasks - lista task background in attesa",
           "/task <id> - dettaglio task background",
           "/retrytask <id> - ritenta invio risultato task",
+          "/canceltask <id> - cancella task schedulato/in corso",
         ].join("\n"),
       );
       return true;
@@ -132,6 +134,13 @@ export async function handleTelegramCommand(params: {
         return true;
       }
       await params.sendCommandReply(await params.retryTaskDelivery(command.args));
+      return true;
+    case "canceltask":
+      if (!command.args) {
+        await params.sendCommandReply("Usage: /canceltask <task-id>");
+        return true;
+      }
+      await params.sendCommandReply(await params.cancelTask(command.args));
       return true;
     case "clear":
       params.clearConversation(params.update.userId);

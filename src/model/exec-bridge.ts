@@ -37,6 +37,7 @@ function buildPromptText(request: ModelRequest): string {
     "- Use available Codex tools (especially shell/apply_patch) when useful, then report the concrete result.\n" +
     "- Keep the answer concise and actionable.\n" +
     "- For heartbeat requests, follow HEARTBEAT.md policy strictly: return exactly HEARTBEAT_OK when no action is needed; otherwise return compact JSON with action=checkin|alert and fields issue/impact/nextStep/todoItems.\n" +
+    "- Runtime may intercept task-management intents (schedule/cancel/list/inspect/retry) and TODO disambiguation before normal handling; keep responses concise and avoid inventing background-task IDs.\n" +
     "- Wrap only your final answer inside <final>...</final> tags.\n" +
     "- Do not invent custom XML-like tags.\n" +
     "- To send the final answer as Telegram audio, put this at the beginning of the final answer: <response_mode>audio</response_mode>.\n" +

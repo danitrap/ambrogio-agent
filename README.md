@@ -13,6 +13,10 @@ Personal-only agent wrapper for Telegram with a secure `/data` boundary and Agen
 - Docker hardening baseline (`read_only`, `cap_drop=ALL`, `no-new-privileges`)
 - Backend-tools-only mode via `codex exec` (no local fallback execution).
 - Minimal heartbeat loop every 30 minutes with `HEARTBEAT_OK` silent mode, explicit `checkin|alert` actions, and Telegram delivery with dedup.
+- Soft-timeout for long requests (60s): user gets immediate "background task" feedback while Codex continues.
+- Background task lifecycle persisted in SQLite with delivery retry.
+- Delayed tasks in natural language (for example, "fra 5 minuti ..."), executed by an internal scheduler.
+- Natural-language runtime task management (`list`, `inspect`, `retry`, `cancel`) with explicit confirmation on ambiguity.
 
 ## Local run
 
@@ -71,6 +75,7 @@ The agent runs a dedicated heartbeat every 30 minutes (fixed interval, no config
 - Reads optional `/data/HEARTBEAT.md` instructions.
 - Runs a lightweight model check with a runtime status block.
 - Runtime status includes local timezone/date-time, heartbeat last state, idle duration, recent Telegram messages, conversation context (last 8 turns), TODO path, and TODO open-item snapshot (max 10).
+- Runtime status includes task metrics: pending background deliveries and scheduled delayed tasks.
 - If the model replies exactly `HEARTBEAT_OK`, nothing is sent (unless `HEARTBEAT.md` explicitly asks for an always-on notice message).
 - If action is needed, expected output is JSON:
   - `{"action":"checkin|alert","issue":"...","impact":"...","nextStep":"...","todoItems":["..."]}`
@@ -81,7 +86,27 @@ The agent runs a dedicated heartbeat every 30 minutes (fixed interval, no config
 - Alerts are sent to the most recent authorized chat seen at runtime.
 - `/heartbeat` forces an immediate run and returns a summary of the outcome.
 - `/status` reports heartbeat interval/running/last run/last result plus idle and latest Telegram summary.
-- `/clear` resets conversation state and heartbeat runtime keys (including dedup keys).
+- `/clear` resets conversation state, heartbeat runtime keys (including dedup keys), and task state.
+
+## Task Management
+
+Long operations automatically move to background after 60s timeout without killing Codex execution.
+
+- Telegram immediately receives a message with `Task ID`.
+- When the job finishes, the result is delivered automatically.
+- If delivery fails, it is retried on the next heartbeat cycle.
+
+Use natural language for task operations:
+
+- "Mostra i task attivi"
+- "Dammi i dettagli del task dl-..."
+- "Ritenta il task dl-..."
+- "Cancella il task precedente"
+- "Tra 5 minuti mandami i top post di Hacker News"
+
+When runtime tasks and TODO intents are ambiguous, the agent asks explicit confirmation before executing.
+
+Legacy commands (`/tasks`, `/task <id>`, `/retrytask <id>`, `/canceltask <id>`) remain available for debugging.
 
 Example `HEARTBEAT.md`:
 

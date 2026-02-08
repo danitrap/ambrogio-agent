@@ -31,7 +31,26 @@ const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
 const GENERATED_SCANNED_PDFS_RELATIVE_DIR = "generated/scanned-pdfs";
 const MAX_RECENT_TELEGRAM_MESSAGES = 50;
 const HEARTBEAT_ALERT_DEDUP_WINDOW_MS = 4 * 60 * 60 * 1000;
+const DELAYED_TASK_POLL_INTERVAL_MS = 10_000;
+const NATURAL_SCHEDULE_CONFIDENCE_THRESHOLD = 0.7;
+const NATURAL_CANCEL_CONFIDENCE_THRESHOLD = 0.45;
+const NATURAL_TASK_MANAGEMENT_CONFIDENCE_THRESHOLD = 0.6;
 type PendingBackgroundTask = ReturnType<StateStore["getPendingBackgroundTasks"]>[number];
+type ScheduledTask = ReturnType<StateStore["getDueScheduledTasks"]>[number];
+type NaturalDomain = "runtime_task" | "todo";
+
+type NaturalTaskAction =
+  | { intent: "none"; confidence: number; needsConfirmation?: boolean; confirmationQuestion?: string }
+  | { intent: "schedule"; confidence: number; runAtIso: string; taskPrompt: string }
+  | { intent: "cancel"; confidence: number; taskId?: string; needsConfirmation?: boolean; confirmationQuestion?: string }
+  | {
+      intent: "list" | "inspect" | "retry";
+      confidence: number;
+      domain: NaturalDomain | "none";
+      taskId?: string;
+      needsConfirmation?: boolean;
+      confirmationQuestion?: string;
+    };
 
 function previewText(value: string, max = 160): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
@@ -96,6 +115,100 @@ function buildLastLogMessage(summary: ReturnType<ExecBridge["getLastExecutionSum
   }
 
   return lines.join("\n");
+}
+
+function unwrapFinalTags(text: string): string {
+  const trimmed = text.trim();
+  const tagged = trimmed.match(/^<final>([\s\S]*?)<\/final>$/i);
+  if (tagged?.[1]) {
+    return tagged[1].trim();
+  }
+  return trimmed.replaceAll(/<\/?final>/gi, "").trim();
+}
+
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    return null;
+  }
+  return text.slice(start, end + 1);
+}
+
+function looksLikeNaturalTaskRequest(text: string): boolean {
+  const normalized = text.toLowerCase();
+  const hasScheduleCue = [
+    "tra ",
+    "fra ",
+    "minut",
+    "ore ",
+    "alle ",
+    "domani",
+    "ricord",
+  ].some((marker) => normalized.includes(marker));
+  const hasCancelCue =
+    /\b(annulla|cancella|elimina|cancel|stop)\b/.test(normalized) && /\btask\b/.test(normalized);
+  const hasManageCue =
+    /\b(task|tasks|stato|lista|elenco|mostra|dettagli|retry|ritenta|todo|checklist)\b/.test(normalized);
+  return hasScheduleCue || hasCancelCue || hasManageCue;
+}
+
+function parseNaturalTaskActionPayload(text: string): NaturalTaskAction | null {
+  const raw = unwrapFinalTags(text);
+  const jsonBlock = extractFirstJsonObject(raw);
+  if (!jsonBlock) {
+    return null;
+  }
+  try {
+    const value = JSON.parse(jsonBlock) as {
+      domain?: string;
+      action?: string;
+      intent?: string;
+      confidence?: number;
+      runAtIso?: string;
+      taskPrompt?: string;
+      taskId?: string;
+      needsConfirmation?: boolean;
+      confirmationQuestion?: string;
+    };
+    const confidence = typeof value.confidence === "number" ? value.confidence : 0;
+    const needsConfirmation = value.needsConfirmation === true;
+    const confirmationQuestion = typeof value.confirmationQuestion === "string" ? value.confirmationQuestion.trim() : "";
+    const domain: NaturalDomain | "none" =
+      value.domain === "runtime_task" || value.domain === "todo" ? value.domain : "none";
+    const action = typeof value.action === "string" ? value.action.trim() : "";
+    if (action === "list" || action === "inspect" || action === "retry") {
+      const taskId = (value.taskId ?? "").trim();
+      return {
+        intent: action,
+        confidence,
+        domain,
+        taskId: taskId || undefined,
+        needsConfirmation,
+        confirmationQuestion: confirmationQuestion || undefined,
+      };
+    }
+    if (value.intent === "schedule") {
+      const runAtIso = (value.runAtIso ?? "").trim();
+      const taskPrompt = (value.taskPrompt ?? "").trim();
+      if (!runAtIso || !taskPrompt || Number.isNaN(Date.parse(runAtIso))) {
+        return null;
+      }
+      return { intent: "schedule", confidence, runAtIso, taskPrompt };
+    }
+    if (value.intent === "cancel") {
+      const taskId = (value.taskId ?? "").trim();
+      return taskId
+        ? { intent: "cancel", confidence, taskId }
+        : { intent: "cancel", confidence, needsConfirmation, confirmationQuestion: confirmationQuestion || undefined };
+    }
+    if (value.intent === "none") {
+      return { intent: "none", confidence, needsConfirmation, confirmationQuestion: confirmationQuestion || undefined };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 
@@ -236,6 +349,8 @@ async function main(): Promise<void> {
       skipped: bootstrapResult.skipped,
     });
   }
+  const naturalSchedulerSkillPath = path.join(projectSkillsRoot, "natural-scheduler", "SKILL.md");
+  const naturalSchedulerInstructions = await readFile(naturalSchedulerSkillPath, "utf8").catch(() => "");
 
   const skills = new SkillDiscovery(codexSkillsRoot);
   const modelBridge = new ExecBridge(config.codexCommand, config.codexArgs, logger, {
@@ -415,6 +530,217 @@ async function main(): Promise<void> {
     }
   };
 
+  const tryParseNaturalTaskAction = async (update: { updateId: number; userId: number; chatId: number }, text: string): Promise<NaturalTaskAction | null> => {
+    if (!looksLikeNaturalTaskRequest(text)) {
+      return null;
+    }
+
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const nowIso = new Date().toISOString();
+    const parserPrompt = [
+      "You are a scheduling parser. Return JSON only.",
+      "Interpret the user message and decide if it asks runtime-task management or TODO operations.",
+      "Output schema:",
+      `{"domain":"runtime_task|todo|none","action":"schedule|cancel|list|inspect|retry|none","intent":"schedule|cancel|none","confidence":0..1,"runAtIso":"ISO-or-empty","taskPrompt":"string-or-empty","taskId":"string-or-empty","needsConfirmation":true|false,"confirmationQuestion":"string-or-empty"}`,
+      "Rules:",
+      `- Use timezone: ${timezone}.`,
+      `- Current time ISO: ${nowIso}.`,
+      "- domain=runtime_task for delayed/background task operations.",
+      "- domain=todo for TODO/checklist operations.",
+      "- action=list|inspect|retry are for runtime task management only.",
+      "- If scheduling intent is clear, intent=schedule with absolute runAtIso and taskPrompt.",
+      "- If cancellation is clear, intent=cancel.",
+      "- If no explicit task id is present, leave taskId empty.",
+      "- If ambiguous or not scheduling related, intent=none.",
+      "- If ambiguity exists between runtime tasks and TODO list, set needsConfirmation=true and include a concise confirmationQuestion.",
+      "- taskPrompt must be the action to execute at runtime, concise and actionable.",
+      "- Never include markdown, prose, or code fences.",
+      naturalSchedulerInstructions ? `Scheduler reference:\n${naturalSchedulerInstructions}` : "",
+      `User message:\n${text}`,
+    ].filter(Boolean).join("\n\n");
+
+    try {
+      const controller = new AbortController();
+      const parsed = await withTimeout(
+        modelBridge.respond({
+          requestId: `schedule-parse-${update.updateId}`,
+          message: parserPrompt,
+          skills: [],
+          signal: controller.signal,
+        }),
+        15_000,
+        () => controller.abort(),
+      );
+      const parsedAction = parseNaturalTaskActionPayload(parsed.text ?? "");
+      if (!parsedAction) {
+        return null;
+      }
+      if (parsedAction.intent === "schedule") {
+        const confidence = parsedAction.confidence;
+        if (confidence < NATURAL_SCHEDULE_CONFIDENCE_THRESHOLD) {
+          return { intent: "none", confidence };
+        }
+        const runAtIso = parsedAction.runAtIso;
+        const taskPrompt = parsedAction.taskPrompt;
+        if (!runAtIso || !taskPrompt || Number.isNaN(Date.parse(runAtIso))) {
+          return { intent: "none", confidence };
+        }
+        if (Date.parse(runAtIso) <= Date.now()) {
+          return { intent: "none", confidence };
+        }
+        return { intent: "schedule", confidence, runAtIso, taskPrompt };
+      }
+      if (parsedAction.intent === "cancel") {
+        const confidence = parsedAction.confidence;
+        if (confidence < NATURAL_CANCEL_CONFIDENCE_THRESHOLD) {
+          return { intent: "none", confidence };
+        }
+        const taskId = parsedAction.taskId?.trim() ?? "";
+        return taskId ? { intent: "cancel", confidence, taskId } : { intent: "cancel", confidence };
+      }
+      if (parsedAction.intent === "list" || parsedAction.intent === "inspect" || parsedAction.intent === "retry") {
+        if (parsedAction.confidence < NATURAL_TASK_MANAGEMENT_CONFIDENCE_THRESHOLD) {
+          return {
+            intent: "none",
+            confidence: parsedAction.confidence,
+            needsConfirmation: true,
+            confirmationQuestion:
+              parsedAction.confirmationQuestion ??
+              "Vuole operare sui task runtime o sulla lista TODO?",
+          };
+        }
+        return parsedAction;
+      }
+      return parsedAction;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn("natural_scheduler_parse_failed", {
+        updateId: update.updateId,
+        userId: update.userId,
+        chatId: update.chatId,
+        message,
+      });
+      return null;
+    }
+  };
+
+  const executeScheduledTask = async (task: ScheduledTask): Promise<void> => {
+    if (!stateStore.claimScheduledTask(task.taskId)) {
+      return;
+    }
+    const prompt = task.payloadPrompt ?? task.requestPreview;
+    try {
+      const reply = await agent.handleMessage(task.userId, prompt, `delayed-${task.taskId}`);
+      const marked = stateStore.markBackgroundTaskCompleted(task.taskId, reply);
+      if (!marked) {
+        logger.info("scheduled_task_result_dropped", { taskId: task.taskId, reason: "status_changed" });
+        return;
+      }
+      const refreshed = stateStore.getBackgroundTask(task.taskId);
+      if (!refreshed) {
+        return;
+      }
+      await deliverBackgroundTask(refreshed, "completion");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failureReply = `Task schedulato fallito (${task.taskId}): ${message}`;
+      const marked = stateStore.markBackgroundTaskFailed(task.taskId, message, failureReply);
+      if (!marked) {
+        logger.info("scheduled_task_failure_dropped", { taskId: task.taskId, reason: "status_changed" });
+        return;
+      }
+      const refreshed = stateStore.getBackgroundTask(task.taskId);
+      if (!refreshed) {
+        return;
+      }
+      await deliverBackgroundTask(refreshed, "completion");
+    }
+  };
+
+  const resolveCancelableDelayedTask = (update: { userId: number; chatId: number }, taskId?: string): { kind: "single"; taskId: string } | { kind: "none" } | { kind: "ambiguous"; tasks: ReturnType<StateStore["getCancelableDelayedTasksForUser"]> } => {
+    const explicitTaskId = taskId?.trim();
+    if (explicitTaskId) {
+      return { kind: "single", taskId: explicitTaskId };
+    }
+    const candidates = stateStore.getCancelableDelayedTasksForUser(update.userId, update.chatId, 5);
+    if (candidates.length === 0) {
+      return { kind: "none" };
+    }
+    if (candidates.length > 1) {
+      return { kind: "ambiguous", tasks: candidates };
+    }
+    return { kind: "single", taskId: candidates[0]!.taskId };
+  };
+
+  const buildActiveTasksReply = (): string => {
+    const active = stateStore.getActiveBackgroundTasks(10);
+    if (active.length === 0) {
+      return "Nessun task attivo.";
+    }
+    const lines = ["Task attivi (scheduled/running/pending delivery):"];
+    for (const task of active) {
+      const runAt = task.runAt ? ` | runAt=${task.runAt}` : "";
+      lines.push(
+        `- ${task.taskId} | kind=${task.kind} | status=${task.status}${runAt} | created=${task.createdAt} | preview=${task.requestPreview}`,
+      );
+    }
+    return lines.join("\n");
+  };
+
+  const buildTaskDetailsReply = (taskId: string): string => {
+    const task = stateStore.getBackgroundTask(taskId.trim());
+    if (!task) {
+      return `Task non trovato: ${taskId}`;
+    }
+    return [
+      `Task: ${task.taskId}`,
+      `Kind: ${task.kind}`,
+      `Status: ${task.status}`,
+      `Created: ${task.createdAt}`,
+      `Run at: ${task.runAt ?? "n/a"}`,
+      `Timed out at: ${task.timedOutAt}`,
+      `Completed at: ${task.completedAt ?? "n/a"}`,
+      `Delivered at: ${task.deliveredAt ?? "n/a"}`,
+      `Command: ${task.command ?? "n/a"}`,
+      `Preview: ${task.requestPreview}`,
+      `Error: ${task.errorMessage ?? "none"}`,
+    ].join("\n");
+  };
+
+  const retryTaskDelivery = async (taskId: string): Promise<string> => {
+    const normalized = taskId.trim();
+    if (!normalized) {
+      return "Task ID mancante.";
+    }
+    const task = stateStore.getBackgroundTask(normalized);
+    if (!task) {
+      return `Task non trovato: ${normalized}`;
+    }
+    if (task.status === "completed_delivered" || task.status === "failed_delivered") {
+      return `Task ${normalized} gia consegnato.`;
+    }
+    if (task.status === "canceled") {
+      return `Task ${normalized} e cancellato.`;
+    }
+    if (task.status === "scheduled") {
+      return `Task ${normalized} e schedulato; verra eseguito a ${task.runAt ?? "orario non disponibile"}.`;
+    }
+    if (task.status === "running") {
+      return `Task ${normalized} ancora in esecuzione.`;
+    }
+    const delivered = await deliverBackgroundTask(task, "completion");
+    return delivered
+      ? `Task ${normalized} consegnato con successo.`
+      : `Task ${normalized} non consegnato; verra ritentato automaticamente all'heartbeat.`;
+  };
+
+  const runDueScheduledTasks = async (): Promise<void> => {
+    const due = stateStore.getDueScheduledTasks(10);
+    for (const task of due) {
+      void executeScheduledTask(task);
+    }
+  };
+
   const runHeartbeatPromptWithTimeout = async (prompt: string, requestId: string): Promise<string> => {
     const controller = new AbortController();
     const result = await withTimeout(
@@ -482,6 +808,7 @@ async function main(): Promise<void> {
     const todoPath = path.join(config.dataRoot, "TODO.md");
     const todoOpenItems = await readTodoSnapshot();
     const pendingBackgroundTasks = stateStore.countPendingBackgroundTasks();
+    const scheduledTasks = stateStore.countScheduledTasks();
 
     return [
       "Runtime status:",
@@ -494,6 +821,7 @@ async function main(): Promise<void> {
       `Handled messages: ${handledMessages}`,
       `Failed messages: ${failedMessages}`,
       `Background tasks pending delivery: ${pendingBackgroundTasks}`,
+      `Delayed tasks scheduled: ${scheduledTasks}`,
       `Heartbeat in flight: ${heartbeatState.heartbeatInFlight ? "yes" : "no"}`,
       `Heartbeat last run: ${heartbeatState.heartbeatLastRunAt ?? "n/a"}`,
       `Heartbeat last result: ${heartbeatState.heartbeatLastResult}`,
@@ -540,7 +868,11 @@ async function main(): Promise<void> {
       await heartbeatRunner.runScheduledHeartbeat("timer");
     })();
   }, HEARTBEAT_INTERVAL_MS);
+  setInterval(() => {
+    void runDueScheduledTasks();
+  }, DELAYED_TASK_POLL_INTERVAL_MS);
   void flushPendingBackgroundTasks();
+  void runDueScheduledTasks();
   logger.info("heartbeat_loop_started", {
     intervalMs: HEARTBEAT_INTERVAL_MS,
     filePath: `${config.dataRoot}/${HEARTBEAT_FILE_NAME}`,
@@ -663,7 +995,11 @@ async function main(): Promise<void> {
 
           void tracked.operationPromise
             .then(async (reply) => {
-              stateStore.markBackgroundTaskCompleted(taskId, reply);
+              const marked = stateStore.markBackgroundTaskCompleted(taskId, reply);
+              if (!marked) {
+                logger.info("background_task_result_dropped", { taskId, reason: "status_changed" });
+                return;
+              }
               const task = stateStore.getBackgroundTask(taskId);
               if (!task) {
                 logger.warn("background_task_missing_after_complete", { taskId });
@@ -674,7 +1010,11 @@ async function main(): Promise<void> {
             .catch(async (error) => {
               const message = error instanceof Error ? error.message : String(error);
               const failureReply = `Task in background fallito (ID: ${taskId}): ${message}`;
-              stateStore.markBackgroundTaskFailed(taskId, message, failureReply);
+              const marked = stateStore.markBackgroundTaskFailed(taskId, message, failureReply);
+              if (!marked) {
+                logger.info("background_task_failure_dropped", { taskId, reason: "status_changed" });
+                return;
+              }
               const task = stateStore.getBackgroundTask(taskId);
               if (!task) {
                 logger.warn("background_task_missing_after_failure", { taskId, message });
@@ -721,6 +1061,7 @@ async function main(): Promise<void> {
               `Handled messages: ${handledMessages}`,
               `Failed messages: ${failedMessages}`,
               `Background tasks pending delivery: ${stateStore.countPendingBackgroundTasks()}`,
+              `Delayed tasks scheduled: ${stateStore.countScheduledTasks()}`,
               `Backend command: ${config.codexCommand}`,
               `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
               `Heartbeat interval: ${Math.floor(HEARTBEAT_INTERVAL_MS / 60000)}m`,
@@ -866,54 +1207,31 @@ async function main(): Promise<void> {
             return "Heartbeat completato: alert necessario ma nessuna chat autorizzata disponibile.";
           },
           getTasksReply: () => {
-            const active = stateStore.getActiveBackgroundTasks(10);
-            if (active.length === 0) {
-              return "Nessun task background attivo.";
-            }
-            const lines = ["Task background attivi (running + pending delivery):"];
-            for (const task of active) {
-              lines.push(
-                `- ${task.taskId} | status=${task.status} | created=${task.createdAt} | preview=${task.requestPreview}`,
-              );
-            }
-            return lines.join("\n");
+            return buildActiveTasksReply();
           },
           getTaskReply: (taskId: string) => {
-            const task = stateStore.getBackgroundTask(taskId.trim());
-            if (!task) {
-              return `Task non trovato: ${taskId}`;
-            }
-            return [
-              `Task: ${task.taskId}`,
-              `Status: ${task.status}`,
-              `Created: ${task.createdAt}`,
-              `Timed out at: ${task.timedOutAt}`,
-              `Completed at: ${task.completedAt ?? "n/a"}`,
-              `Delivered at: ${task.deliveredAt ?? "n/a"}`,
-              `Command: ${task.command ?? "n/a"}`,
-              `Preview: ${task.requestPreview}`,
-              `Error: ${task.errorMessage ?? "none"}`,
-            ].join("\n");
+            return buildTaskDetailsReply(taskId);
           },
           retryTaskDelivery: async (taskId: string) => {
             const normalized = taskId.trim();
             if (!normalized) {
               return "Usage: /retrytask <task-id>";
             }
-            const task = stateStore.getBackgroundTask(normalized);
-            if (!task) {
+            return retryTaskDelivery(normalized);
+          },
+          cancelTask: async (taskId: string) => {
+            const normalized = taskId.trim();
+            if (!normalized) {
+              return "Usage: /canceltask <task-id>";
+            }
+            const result = stateStore.cancelTask(normalized);
+            if (result === "not_found") {
               return `Task non trovato: ${normalized}`;
             }
-            if (task.status === "completed_delivered" || task.status === "failed_delivered") {
-              return `Task ${normalized} gia consegnato.`;
+            if (result === "already_done") {
+              return `Task ${normalized} non cancellabile (gia completato/fallito).`;
             }
-            if (task.status === "running") {
-              return `Task ${normalized} ancora in esecuzione.`;
-            }
-            const delivered = await deliverBackgroundTask(task, "completion");
-            return delivered
-              ? `Task ${normalized} consegnato con successo.`
-              : `Task ${normalized} non consegnato; verra ritentato automaticamente all'heartbeat.`;
+            return `Task ${normalized} cancellato.`;
           },
         });
         if (commandHandled) {
@@ -934,6 +1252,245 @@ async function main(): Promise<void> {
             },
           });
           return;
+        }
+
+        if (promptText && update.attachments.length === 0 && !update.voiceFileId) {
+          const naturalAction = await tryParseNaturalTaskAction(update, promptText);
+          if (naturalAction && naturalAction.intent !== "none") {
+            if (naturalAction.intent === "schedule") {
+              const runAtMs = Date.parse(naturalAction.runAtIso);
+              const taskId = `dl-${update.updateId}-${Date.now()}`;
+              stateStore.createScheduledTask({
+                taskId,
+                updateId: update.updateId,
+                userId: update.userId,
+                chatId: update.chatId,
+                command: "natural_schedule",
+                prompt: naturalAction.taskPrompt,
+                runAt: naturalAction.runAtIso,
+                requestPreview: previewText(naturalAction.taskPrompt, 240),
+              });
+              await sendTelegramTextReply({
+                telegram,
+                logger,
+                update,
+                text:
+                  `Task schedulato con successo.\n` +
+                  `Task ID: ${taskId}\n` +
+                  `Esecuzione prevista: ${new Date(runAtMs).toISOString()}\n` +
+                  `Prompt: ${naturalAction.taskPrompt}`,
+                onSentText: async (text) => {
+                  await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                },
+              });
+              return;
+            }
+            if (naturalAction.intent === "cancel") {
+              const resolved = resolveCancelableDelayedTask(update, naturalAction.taskId);
+              if (resolved.kind === "none") {
+                await sendTelegramTextReply({
+                  telegram,
+                  logger,
+                  update,
+                  text: "Non trovo task delayed cancellabili per questa chat.",
+                  onSentText: async (text) => {
+                    await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                  },
+                });
+                return;
+              }
+              if (resolved.kind === "ambiguous") {
+                const listed = resolved.tasks
+                  .slice(0, 3)
+                  .map((task) => `- ${task.taskId} | status=${task.status} | runAt=${task.runAt ?? "n/a"}`)
+                  .join("\n");
+                await sendTelegramTextReply({
+                  telegram,
+                  logger,
+                  update,
+                  text:
+                    "Ho trovato piu task delayed attivi. Dimmi quale ID cancellare con /canceltask <id>:\n" +
+                    listed,
+                  onSentText: async (text) => {
+                    await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                  },
+                });
+                return;
+              }
+              const targetTaskId = resolved.taskId;
+
+              const result = stateStore.cancelTask(targetTaskId);
+              const reply =
+                result === "canceled"
+                  ? `Task ${targetTaskId} cancellato.`
+                  : result === "not_found"
+                    ? `Task non trovato: ${targetTaskId}`
+                    : `Task ${targetTaskId} non cancellabile (gia completato/fallito).`;
+              await sendTelegramTextReply({
+                telegram,
+                logger,
+                update,
+                text: reply,
+                onSentText: async (text) => {
+                  await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                },
+              });
+              return;
+            }
+            if (naturalAction.intent === "list") {
+              if (naturalAction.needsConfirmation || naturalAction.domain === "none") {
+                await sendTelegramTextReply({
+                  telegram,
+                  logger,
+                  update,
+                  text:
+                    naturalAction.confirmationQuestion ??
+                    "Confermi se vuoi la lista dei task runtime o della TODO list?",
+                  onSentText: async (text) => {
+                    await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                  },
+                });
+                return;
+              }
+              const text =
+                naturalAction.domain === "runtime_task"
+                  ? buildActiveTasksReply()
+                  : `TODO aperti:\n${(await readTodoSnapshot()).join("\n")}`;
+              await sendTelegramTextReply({
+                telegram,
+                logger,
+                update,
+                text,
+                onSentText: async (sent) => {
+                  await recordRecentTelegramEntry("assistant", `text: ${previewText(sent, 120)}`);
+                },
+              });
+              return;
+            }
+            if (naturalAction.intent === "inspect") {
+              if (naturalAction.needsConfirmation || naturalAction.domain === "none") {
+                await sendTelegramTextReply({
+                  telegram,
+                  logger,
+                  update,
+                  text:
+                    naturalAction.confirmationQuestion ??
+                    "Confermi che vuoi i dettagli di un task runtime? Se si, indica anche l'ID.",
+                  onSentText: async (text) => {
+                    await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                  },
+                });
+                return;
+              }
+              const targetTaskId = naturalAction.taskId?.trim();
+              if (!targetTaskId) {
+                const active = stateStore.getActiveBackgroundTasks(2);
+                if (active.length !== 1) {
+                  await sendTelegramTextReply({
+                    telegram,
+                    logger,
+                    update,
+                    text: "Indica l'ID task da ispezionare (oppure chiedi \"mostra i task attivi\").",
+                    onSentText: async (text) => {
+                      await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                    },
+                  });
+                  return;
+                }
+                const single = active[0]!.taskId;
+                await sendTelegramTextReply({
+                  telegram,
+                  logger,
+                  update,
+                  text: buildTaskDetailsReply(single),
+                  onSentText: async (text) => {
+                    await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                  },
+                });
+                return;
+              }
+              await sendTelegramTextReply({
+                telegram,
+                logger,
+                update,
+                text: buildTaskDetailsReply(targetTaskId),
+                onSentText: async (text) => {
+                  await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                },
+              });
+              return;
+            }
+            if (naturalAction.intent === "retry") {
+              if (naturalAction.needsConfirmation || naturalAction.domain === "none") {
+                await sendTelegramTextReply({
+                  telegram,
+                  logger,
+                  update,
+                  text:
+                    naturalAction.confirmationQuestion ??
+                    "Confermi che vuoi ritentare la consegna di un task runtime? Se si, indica l'ID.",
+                  onSentText: async (text) => {
+                    await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                  },
+                });
+                return;
+              }
+              const targetTaskId = naturalAction.taskId?.trim();
+              if (!targetTaskId) {
+                const pending = stateStore.getPendingBackgroundTasks(2);
+                if (pending.length !== 1) {
+                  await sendTelegramTextReply({
+                    telegram,
+                    logger,
+                    update,
+                    text: "Indica l'ID task da ritentare (oppure chiedi \"mostra i task attivi\").",
+                    onSentText: async (text) => {
+                      await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                    },
+                  });
+                  return;
+                }
+                const single = pending[0]!.taskId;
+                await sendTelegramTextReply({
+                  telegram,
+                  logger,
+                  update,
+                  text: await retryTaskDelivery(single),
+                  onSentText: async (text) => {
+                    await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                  },
+                });
+                return;
+              }
+              await sendTelegramTextReply({
+                telegram,
+                logger,
+                update,
+                text: await retryTaskDelivery(targetTaskId),
+                onSentText: async (text) => {
+                  await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+                },
+              });
+              return;
+            }
+          }
+          if (naturalAction && naturalAction.intent === "none") {
+            await sendTelegramTextReply({
+              telegram,
+              logger,
+              update,
+              text:
+                (naturalAction.confirmationQuestion
+                  ? `${naturalAction.confirmationQuestion} `
+                  : "") +
+                "Non ho capito bene la richiesta task/TODO. " +
+                "Esempi: \"tra 5 minuti ricordami X\", \"mostra i task attivi\", \"mostra i TODO aperti\", \"ritenta il task dl-...\".",
+              onSentText: async (text) => {
+                await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+              },
+            });
+            return;
+          }
         }
 
         const result = await runOperationWithSoftTimeout({
@@ -1011,6 +1568,89 @@ async function main(): Promise<void> {
           failedMessages += 1;
         }
         reply = result.reply;
+
+        if (promptText && looksLikeNaturalTaskRequest(promptText)) {
+          const leakedAction = parseNaturalTaskActionPayload(reply);
+          if (leakedAction && leakedAction.intent !== "none") {
+            logger.warn("natural_scheduler_json_leak_intercepted", {
+              updateId: update.updateId,
+              userId: update.userId,
+              chatId: update.chatId,
+              intent: leakedAction.intent,
+              confidence: leakedAction.confidence,
+            });
+            if (leakedAction.intent === "cancel") {
+              const resolved = resolveCancelableDelayedTask(update, leakedAction.taskId);
+              if (resolved.kind === "none") {
+                reply = "Non trovo task delayed cancellabili per questa chat.";
+              } else if (resolved.kind === "ambiguous") {
+                const listed = resolved.tasks
+                  .slice(0, 3)
+                  .map((task) => `- ${task.taskId} | status=${task.status} | runAt=${task.runAt ?? "n/a"}`)
+                  .join("\n");
+                reply =
+                  "Ho trovato piu task delayed attivi. Dimmi quale ID cancellare con /canceltask <id>:\n" +
+                  listed;
+              } else {
+                const result = stateStore.cancelTask(resolved.taskId);
+                reply =
+                  result === "canceled"
+                    ? `Task ${resolved.taskId} cancellato.`
+                    : result === "not_found"
+                      ? `Task non trovato: ${resolved.taskId}`
+                      : `Task ${resolved.taskId} non cancellabile (gia completato/fallito).`;
+              }
+            } else if (leakedAction.intent === "schedule") {
+              const taskId = `dl-${update.updateId}-${Date.now()}`;
+              const runAtMs = Date.parse(leakedAction.runAtIso);
+              stateStore.createScheduledTask({
+                taskId,
+                updateId: update.updateId,
+                userId: update.userId,
+                chatId: update.chatId,
+                command: "natural_schedule",
+                prompt: leakedAction.taskPrompt,
+                runAt: leakedAction.runAtIso,
+                requestPreview: previewText(leakedAction.taskPrompt, 240),
+              });
+              reply =
+                `Task schedulato con successo.\n` +
+                `Task ID: ${taskId}\n` +
+                `Esecuzione prevista: ${new Date(runAtMs).toISOString()}\n` +
+                `Prompt: ${leakedAction.taskPrompt}`;
+            } else if (leakedAction.intent === "list") {
+              if (leakedAction.domain === "runtime_task") {
+                reply = buildActiveTasksReply();
+              } else if (leakedAction.domain === "todo") {
+                reply = `TODO aperti:\n${(await readTodoSnapshot()).join("\n")}`;
+              } else {
+                reply =
+                  leakedAction.confirmationQuestion ??
+                  "Confermi se vuoi la lista dei task runtime o della TODO list?";
+              }
+            } else if (leakedAction.intent === "inspect") {
+              if (leakedAction.domain !== "runtime_task") {
+                reply =
+                  leakedAction.confirmationQuestion ??
+                  "Confermi che vuoi i dettagli di un task runtime? Se si, indica anche l'ID.";
+              } else {
+                const target = leakedAction.taskId?.trim();
+                reply = target
+                  ? buildTaskDetailsReply(target)
+                  : "Indica l'ID task da ispezionare (oppure chiedi \"mostra i task attivi\").";
+              }
+            } else if (leakedAction.intent === "retry") {
+              if (leakedAction.domain !== "runtime_task") {
+                reply =
+                  leakedAction.confirmationQuestion ??
+                  "Confermi che vuoi ritentare la consegna di un task runtime? Se si, indica l'ID.";
+              } else {
+                const target = leakedAction.taskId?.trim();
+                reply = target ? await retryTaskDelivery(target) : "Indica l'ID task da ritentare.";
+              }
+            }
+          }
+        }
 
         await dispatchAssistantReply({
           telegram,

@@ -53,4 +53,15 @@ Never commit secrets. Copy `.env.example` to `.env` locally and set `TELEGRAM_BO
 - Heartbeat deduplicates repeated timer-triggered messages for 4 hours using SQLite runtime state.
 - `/status` must report heartbeat interval/in-flight/last-run/last-result and idle data.
 - `/heartbeat` forces an immediate heartbeat run and returns an explicit result summary.
-- `/clear` must clear heartbeat runtime keys (last run/result + dedup keys) along with conversation runtime state.
+- `/clear` must clear heartbeat runtime keys (last run/result + dedup keys) along with conversation runtime state and task state.
+
+## Task Runtime Contract
+
+- Long-running user requests use a soft timeout (60 seconds): if timeout is reached, the user receives an immediate "background task" confirmation with `Task ID`, and Codex execution continues in background.
+- Background task state is persisted in SQLite and includes delivery status.
+- Completed task delivery is retried automatically (heartbeat-driven) when immediate delivery fails.
+- Delayed one-shot tasks are accepted via natural-language scheduling requests and persisted in SQLite with absolute run time (`runAt`).
+- A scheduler loop executes due delayed tasks and delivers results through the same Telegram dispatch path.
+- Natural-language task management must cover listing, inspection, retry, and cancellation of runtime tasks.
+- If runtime-task intent vs TODO intent is ambiguous, runtime must ask explicit confirmation before executing.
+- `/tasks`, `/task <id>`, `/retrytask <id>`, and `/canceltask <id>` are legacy debug commands and should not be required for normal operation.

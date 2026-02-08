@@ -22,6 +22,7 @@ function buildParams(overrides: Partial<Parameters<typeof handleTelegramCommand>
     getTasksReply: () => "",
     getTaskReply: () => "",
     retryTaskDelivery: async () => "",
+    cancelTask: async () => "",
     ...overrides,
   };
 }
@@ -143,5 +144,19 @@ describe("handleTelegramCommand", () => {
 
     expect(handled).toBe(true);
     expect(replies).toEqual(["retry bg-1"]);
+  });
+
+  test("canceltask command delegates cancel", async () => {
+    const replies: string[] = [];
+    const handled = await handleTelegramCommand(buildParams({
+      command: { name: "canceltask", args: "bg-1" },
+      cancelTask: async (taskId) => `cancel ${taskId}`,
+      sendCommandReply: async (text) => {
+        replies.push(text);
+      },
+    }));
+
+    expect(handled).toBe(true);
+    expect(replies).toEqual(["cancel bg-1"]);
   });
 });
