@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grocery List Manager"
+  short_description: "Edit and maintain groceries.me list"
+  default_prompt: "Use $grocery-list-manager to update my grocery list in groceries.me."

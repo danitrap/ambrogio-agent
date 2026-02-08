@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fake Scanned PDF"
+  short_description: "Convert PDFs to scanned-looking output"
+  default_prompt: "Use $fake-scanned-pdf to make this PDF look like a phone scan."
