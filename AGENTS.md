@@ -6,7 +6,7 @@ Core application code lives in `src/`, grouped by responsibility:
 - `src/auth/`, `src/tools/`, `src/skills/`, `src/model/`, `src/telegram/`, `src/logging/`
 - `src/main.ts` process entrypoint
 
-Tests live in `test/` as Bun test files (for example, `test/fs-tools.test.ts`). Runtime data, snapshots, and skill folders are mounted under `data/`. Design notes and planning docs are in `docs/plans/`.
+Tests live in `test/` as Bun test files (for example, `test/fs-tools.test.ts`). Runtime data and snapshots are mounted under `data/`. Skills are discovered from both `data/skills/` and `data/.codex/skills/` (via `CODEX_HOME`). Design notes and planning docs are in `docs/plans/`.
 
 ## Build, Test, and Development Commands
 - `bun install`: install dependencies.
@@ -15,6 +15,8 @@ Tests live in `test/` as Bun test files (for example, `test/fs-tools.test.ts`). 
 - `bun test`: run unit/integration tests in `test/`.
 - `bun run typecheck`: run strict TypeScript checks without emit.
 - `docker compose up -d --build`: build and run the containerized stack.
+
+After code or configuration changes, rebuild and restart containers with `docker compose up -d --build` before validation.
 
 ## Coding Style & Naming Conventions
 Use TypeScript ES modules with strict compiler settings (`tsconfig.json`).

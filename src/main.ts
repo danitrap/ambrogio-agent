@@ -160,7 +160,10 @@ async function main(): Promise<void> {
   const snapshots = new GitSnapshotManager(config.dataRoot);
   await snapshots.init();
 
-  const skills = new SkillDiscovery(`${config.dataRoot}/skills`);
+  const skills = new SkillDiscovery([
+    `${config.dataRoot}/skills`,
+    `${codexHome}/skills`,
+  ]);
   const modelBridge = new CodexAcpBridge(config.acpCommand, config.acpArgs, logger, {
     cwd: config.dataRoot,
     env: {
@@ -270,7 +273,7 @@ async function main(): Promise<void> {
             case "skills": {
               const discovered = await skills.discover();
               if (discovered.length === 0) {
-                await sendCommandReply("Nessuna skill disponibile in /data/skills.");
+                await sendCommandReply("Nessuna skill disponibile in /data/skills o /data/.codex/skills.");
                 continue;
               }
 

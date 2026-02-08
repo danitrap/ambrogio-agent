@@ -42,41 +42,47 @@ function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; b
 }
 
 export class SkillDiscovery {
-  constructor(private readonly skillsRoot: string) {}
+  private readonly skillsRoots: string[];
+
+  constructor(skillsRoot: string | string[]) {
+    this.skillsRoots = Array.isArray(skillsRoot) ? skillsRoot : [skillsRoot];
+  }
 
   async discover(): Promise<SkillMetadata[]> {
-    try {
-      await fs.access(this.skillsRoot);
-    } catch {
-      return [];
-    }
+    const skillById = new Map<string, SkillMetadata>();
 
-    const entries = await fs.readdir(this.skillsRoot, { withFileTypes: true });
-    const skills: SkillMetadata[] = [];
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-
-      const skillPath = path.join(this.skillsRoot, entry.name, "SKILL.md");
+    for (const skillsRoot of this.skillsRoots) {
       try {
-        const raw = await fs.readFile(skillPath, "utf8");
-        const { frontmatter, body } = parseFrontmatter(raw);
-        const name = frontmatter.name ?? entry.name;
-        const description = frontmatter.description ?? body.split(/\r?\n/).find(Boolean) ?? "";
-        skills.push({
-          id: entry.name,
-          name,
-          description,
-          skillPath,
-        });
+        await fs.access(skillsRoot);
       } catch {
         continue;
       }
+
+      const entries = await fs.readdir(skillsRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || skillById.has(entry.name)) {
+          continue;
+        }
+
+        const skillPath = path.join(skillsRoot, entry.name, "SKILL.md");
+        try {
+          const raw = await fs.readFile(skillPath, "utf8");
+          const { frontmatter, body } = parseFrontmatter(raw);
+          const name = frontmatter.name ?? entry.name;
+          const description = frontmatter.description ?? body.split(/\r?\n/).find(Boolean) ?? "";
+          skillById.set(entry.name, {
+            id: entry.name,
+            name,
+            description,
+            skillPath,
+          });
+        } catch {
+          continue;
+        }
+      }
     }
 
-    return skills.sort((a, b) => a.id.localeCompare(b.id));
+    return Array.from(skillById.values()).sort((a, b) => a.id.localeCompare(b.id));
   }
 
   async hydrate(skill: SkillMetadata): Promise<HydratedSkill> {
