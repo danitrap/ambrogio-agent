@@ -669,10 +669,10 @@ async function main(): Promise<void> {
               return "Heartbeat gia in esecuzione.";
             }
             if (outcome.status === "ok") {
-              return null;
+              return "Heartbeat completato: HEARTBEAT_OK (nessun alert).";
             }
             if (outcome.status === "ok_notice_sent") {
-              return null;
+              return "Heartbeat completato: HEARTBEAT_OK (messaggio HEARTBEAT.md inviato).";
             }
             if (outcome.status === "alert_sent") {
               return "Heartbeat completato: alert inviato su Telegram.";

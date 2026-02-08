@@ -81,7 +81,7 @@ describe("handleTelegramCommand", () => {
     expect(replies).toEqual(["Heartbeat completato: ok"]);
   });
 
-  test("heartbeat command stays silent when forced heartbeat is ok", async () => {
+  test("heartbeat command replies when forced heartbeat is ok", async () => {
     const replies: string[] = [];
     const handled = await handleTelegramCommand({
       command: { name: "heartbeat", args: "" },
@@ -100,10 +100,10 @@ describe("handleTelegramCommand", () => {
       executePrompt: async () => ({ reply: "", ok: true }),
       dispatchAssistantReply: async () => undefined,
       sendAudioFile: async () => "",
-      runHeartbeatNow: async () => null,
+      runHeartbeatNow: async () => "Heartbeat completato: HEARTBEAT_OK (nessun alert).",
     });
 
     expect(handled).toBe(true);
-    expect(replies).toEqual([]);
+    expect(replies).toEqual(["Heartbeat completato: HEARTBEAT_OK (nessun alert)."]);
   });
 });
