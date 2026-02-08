@@ -316,6 +316,35 @@ export class StateStore {
     }));
   }
 
+  getActiveBackgroundTasks(limit = 20): BackgroundTaskEntry[] {
+    const rows = this.db
+      .query(
+        `SELECT task_id, update_id, user_id, chat_id, command, request_preview, status,
+                created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message
+         FROM background_tasks
+         WHERE status IN ('running', 'completed_pending_delivery', 'failed_pending_delivery')
+         ORDER BY created_at DESC
+         LIMIT ?1`,
+      )
+      .all(limit) as BackgroundTaskRow[];
+
+    return rows.map((row) => ({
+      taskId: row.task_id,
+      updateId: row.update_id,
+      userId: row.user_id,
+      chatId: row.chat_id,
+      command: row.command,
+      requestPreview: row.request_preview,
+      status: row.status,
+      createdAt: row.created_at,
+      timedOutAt: row.timed_out_at,
+      completedAt: row.completed_at,
+      deliveredAt: row.delivered_at,
+      deliveryText: row.delivery_text,
+      errorMessage: row.error_message,
+    }));
+  }
+
   getBackgroundTask(taskId: string): BackgroundTaskEntry | null {
     const row = this.db
       .query(

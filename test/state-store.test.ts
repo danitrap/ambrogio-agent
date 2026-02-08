@@ -83,6 +83,9 @@ describe("StateStore", () => {
       command: "retry",
       requestPreview: "long-running task",
     });
+    const activeRunning = storeA.getActiveBackgroundTasks(10);
+    expect(activeRunning).toHaveLength(1);
+    expect(activeRunning[0]?.status).toBe("running");
     storeA.markBackgroundTaskCompleted("bg-1", "<response_mode>text</response_mode>\ncompleted");
     expect(storeA.countPendingBackgroundTasks()).toBe(1);
     storeA.close();

@@ -1,83 +1,65 @@
 import { describe, expect, test } from "bun:test";
 import { handleTelegramCommand } from "../src/runtime/command-handlers";
 
+function buildParams(overrides: Partial<Parameters<typeof handleTelegramCommand>[0]> = {}): Parameters<typeof handleTelegramCommand>[0] {
+  return {
+    command: { name: "help", args: "" },
+    update: { updateId: 1, userId: 1, chatId: 1 },
+    isAllowed: () => true,
+    sendCommandReply: async () => undefined,
+    getStatusReply: () => "",
+    getLastLogReply: () => "",
+    getMemoryReply: () => "",
+    getSkillsReply: async () => "",
+    getLastPrompt: () => undefined,
+    setLastPrompt: () => undefined,
+    clearConversation: () => undefined,
+    clearRuntimeState: async () => undefined,
+    executePrompt: async () => ({ reply: "", ok: true }),
+    dispatchAssistantReply: async () => undefined,
+    sendAudioFile: async () => "",
+    runHeartbeatNow: async () => "",
+    getTasksReply: () => "",
+    getTaskReply: () => "",
+    retryTaskDelivery: async () => "",
+    ...overrides,
+  };
+}
+
 describe("handleTelegramCommand", () => {
   test("returns unauthorized reply for blocked users", async () => {
     const replies: string[] = [];
-    const handled = await handleTelegramCommand({
+    const handled = await handleTelegramCommand(buildParams({
       command: { name: "help", args: "" },
       update: { updateId: 1, userId: 99, chatId: 1 },
       isAllowed: () => false,
       sendCommandReply: async (text) => {
         replies.push(text);
       },
-      getStatusReply: () => "",
-      getLastLogReply: () => "",
-      getMemoryReply: () => "",
-      getSkillsReply: async () => "",
-      getLastPrompt: () => undefined,
-      setLastPrompt: () => undefined,
-      clearConversation: () => undefined,
-      clearRuntimeState: async () => undefined,
-      executePrompt: async () => ({ reply: "", ok: true }),
-      dispatchAssistantReply: async () => undefined,
-      sendAudioFile: async () => "",
-      runHeartbeatNow: async () => "",
-    });
+    }));
 
     expect(handled).toBe(true);
     expect(replies).toEqual(["Unauthorized user."]);
   });
 
   test("returns false for non-command payload", async () => {
-    const handled = await handleTelegramCommand({
-      command: null,
-      update: { updateId: 1, userId: 1, chatId: 1 },
-      isAllowed: () => true,
-      sendCommandReply: async () => undefined,
-      getStatusReply: () => "",
-      getLastLogReply: () => "",
-      getMemoryReply: () => "",
-      getSkillsReply: async () => "",
-      getLastPrompt: () => undefined,
-      setLastPrompt: () => undefined,
-      clearConversation: () => undefined,
-      clearRuntimeState: async () => undefined,
-      executePrompt: async () => ({ reply: "", ok: true }),
-      dispatchAssistantReply: async () => undefined,
-      sendAudioFile: async () => "",
-      runHeartbeatNow: async () => "",
-    });
-
+    const handled = await handleTelegramCommand(buildParams({ command: null }));
     expect(handled).toBe(false);
   });
 
   test("handles heartbeat command and returns forced execution result", async () => {
     const replies: string[] = [];
     let called = false;
-    const handled = await handleTelegramCommand({
+    const handled = await handleTelegramCommand(buildParams({
       command: { name: "heartbeat", args: "" },
-      update: { updateId: 1, userId: 1, chatId: 1 },
-      isAllowed: () => true,
       sendCommandReply: async (text) => {
         replies.push(text);
       },
-      getStatusReply: () => "",
-      getLastLogReply: () => "",
-      getMemoryReply: () => "",
-      getSkillsReply: async () => "",
-      getLastPrompt: () => undefined,
-      setLastPrompt: () => undefined,
-      clearConversation: () => undefined,
-      clearRuntimeState: async () => undefined,
-      executePrompt: async () => ({ reply: "", ok: true }),
-      dispatchAssistantReply: async () => undefined,
-      sendAudioFile: async () => "",
       runHeartbeatNow: async () => {
         called = true;
         return "Heartbeat completato: ok";
       },
-    });
+    }));
 
     expect(handled).toBe(true);
     expect(called).toBe(true);
@@ -86,26 +68,13 @@ describe("handleTelegramCommand", () => {
 
   test("heartbeat command replies when forced heartbeat is ok", async () => {
     const replies: string[] = [];
-    const handled = await handleTelegramCommand({
+    const handled = await handleTelegramCommand(buildParams({
       command: { name: "heartbeat", args: "" },
-      update: { updateId: 1, userId: 1, chatId: 1 },
-      isAllowed: () => true,
       sendCommandReply: async (text) => {
         replies.push(text);
       },
-      getStatusReply: () => "",
-      getLastLogReply: () => "",
-      getMemoryReply: () => "",
-      getSkillsReply: async () => "",
-      getLastPrompt: () => undefined,
-      setLastPrompt: () => undefined,
-      clearConversation: () => undefined,
-      clearRuntimeState: async () => undefined,
-      executePrompt: async () => ({ reply: "", ok: true }),
-      dispatchAssistantReply: async () => undefined,
-      sendAudioFile: async () => "",
       runHeartbeatNow: async () => "Heartbeat completato: HEARTBEAT_OK (nessun alert).",
-    });
+    }));
 
     expect(handled).toBe(true);
     expect(replies).toEqual(["Heartbeat completato: HEARTBEAT_OK (nessun alert)."]);
@@ -116,34 +85,63 @@ describe("handleTelegramCommand", () => {
     let conversationCleared = false;
     let runtimeCleared = false;
 
-    const handled = await handleTelegramCommand({
+    const handled = await handleTelegramCommand(buildParams({
       command: { name: "clear", args: "" },
-      update: { updateId: 1, userId: 1, chatId: 1 },
-      isAllowed: () => true,
       sendCommandReply: async (text) => {
         replies.push(text);
       },
-      getStatusReply: () => "",
-      getLastLogReply: () => "",
-      getMemoryReply: () => "",
-      getSkillsReply: async () => "",
-      getLastPrompt: () => undefined,
-      setLastPrompt: () => undefined,
       clearConversation: () => {
         conversationCleared = true;
       },
       clearRuntimeState: async () => {
         runtimeCleared = true;
       },
-      executePrompt: async () => ({ reply: "", ok: true }),
-      dispatchAssistantReply: async () => undefined,
-      sendAudioFile: async () => "",
-      runHeartbeatNow: async () => null,
-    });
+    }));
 
     expect(handled).toBe(true);
     expect(conversationCleared).toBe(true);
     expect(runtimeCleared).toBe(true);
     expect(replies).toEqual(["Memoria conversazione cancellata."]);
+  });
+
+  test("tasks command returns tasks summary", async () => {
+    const replies: string[] = [];
+    const handled = await handleTelegramCommand(buildParams({
+      command: { name: "tasks", args: "" },
+      getTasksReply: () => "task-1",
+      sendCommandReply: async (text) => {
+        replies.push(text);
+      },
+    }));
+
+    expect(handled).toBe(true);
+    expect(replies).toEqual(["task-1"]);
+  });
+
+  test("task command requires id", async () => {
+    const replies: string[] = [];
+    const handled = await handleTelegramCommand(buildParams({
+      command: { name: "task", args: "" },
+      sendCommandReply: async (text) => {
+        replies.push(text);
+      },
+    }));
+
+    expect(handled).toBe(true);
+    expect(replies).toEqual(["Usage: /task <task-id>"]);
+  });
+
+  test("retrytask command delegates retry", async () => {
+    const replies: string[] = [];
+    const handled = await handleTelegramCommand(buildParams({
+      command: { name: "retrytask", args: "bg-1" },
+      retryTaskDelivery: async (taskId) => `retry ${taskId}`,
+      sendCommandReply: async (text) => {
+        replies.push(text);
+      },
+    }));
+
+    expect(handled).toBe(true);
+    expect(replies).toEqual(["retry bg-1"]);
   });
 });

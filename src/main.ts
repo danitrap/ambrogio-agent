@@ -24,7 +24,7 @@ import { TelegramAdapter } from "./telegram/adapter";
 import { parseTelegramCommand } from "./telegram/commands";
 
 const TYPING_INTERVAL_MS = 4_000;
-const MODEL_TIMEOUT_MS = 180_000;
+const MODEL_TIMEOUT_MS = 60_000;
 const MAX_TELEGRAM_AUDIO_BYTES = 49_000_000;
 const MAX_TELEGRAM_DOCUMENT_BYTES = 49_000_000;
 const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
@@ -864,6 +864,56 @@ async function main(): Promise<void> {
               return "Heartbeat completato: check-in necessario ma nessuna chat autorizzata disponibile.";
             }
             return "Heartbeat completato: alert necessario ma nessuna chat autorizzata disponibile.";
+          },
+          getTasksReply: () => {
+            const active = stateStore.getActiveBackgroundTasks(10);
+            if (active.length === 0) {
+              return "Nessun task background attivo.";
+            }
+            const lines = ["Task background attivi (running + pending delivery):"];
+            for (const task of active) {
+              lines.push(
+                `- ${task.taskId} | status=${task.status} | created=${task.createdAt} | preview=${task.requestPreview}`,
+              );
+            }
+            return lines.join("\n");
+          },
+          getTaskReply: (taskId: string) => {
+            const task = stateStore.getBackgroundTask(taskId.trim());
+            if (!task) {
+              return `Task non trovato: ${taskId}`;
+            }
+            return [
+              `Task: ${task.taskId}`,
+              `Status: ${task.status}`,
+              `Created: ${task.createdAt}`,
+              `Timed out at: ${task.timedOutAt}`,
+              `Completed at: ${task.completedAt ?? "n/a"}`,
+              `Delivered at: ${task.deliveredAt ?? "n/a"}`,
+              `Command: ${task.command ?? "n/a"}`,
+              `Preview: ${task.requestPreview}`,
+              `Error: ${task.errorMessage ?? "none"}`,
+            ].join("\n");
+          },
+          retryTaskDelivery: async (taskId: string) => {
+            const normalized = taskId.trim();
+            if (!normalized) {
+              return "Usage: /retrytask <task-id>";
+            }
+            const task = stateStore.getBackgroundTask(normalized);
+            if (!task) {
+              return `Task non trovato: ${normalized}`;
+            }
+            if (task.status === "completed_delivered" || task.status === "failed_delivered") {
+              return `Task ${normalized} gia consegnato.`;
+            }
+            if (task.status === "running") {
+              return `Task ${normalized} ancora in esecuzione.`;
+            }
+            const delivered = await deliverBackgroundTask(task, "completion");
+            return delivered
+              ? `Task ${normalized} consegnato con successo.`
+              : `Task ${normalized} non consegnato; verra ritentato automaticamente all'heartbeat.`;
           },
         });
         if (commandHandled) {
