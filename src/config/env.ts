@@ -22,18 +22,18 @@ export type AppConfig = {
   openaiApiKey: string;
   elevenLabsApiKey: string | null;
   dataRoot: string;
-  acpCommand: string;
-  acpArgs: string[];
+  codexCommand: string;
+  codexArgs: string[];
   logLevel: LogLevel;
   telegramPollTimeoutSeconds: number;
 };
 
 export function loadConfig(): AppConfig {
   const logLevel = (Bun.env.LOG_LEVEL ?? "info") as LogLevel;
-  const acpArgsRaw = Bun.env.ACP_ARGS;
-  const acpArgs = acpArgsRaw
-    ? acpArgsRaw.split(" ").map((part) => part.trim()).filter(Boolean)
-    : ["--dangerously-bypass-approvals-and-sandbox", "-c", "instructions=acp_fs"];
+  const codexArgsRaw = Bun.env.CODEX_ARGS;
+  const codexArgs = codexArgsRaw
+    ? codexArgsRaw.split(" ").map((part) => part.trim()).filter(Boolean)
+    : ["--dangerously-bypass-approvals-and-sandbox", "-c", "instructions=codex_fs"];
 
   return {
     telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),
@@ -41,8 +41,8 @@ export function loadConfig(): AppConfig {
     openaiApiKey: requireEnv("OPENAI_API_KEY"),
     elevenLabsApiKey: Bun.env.ELEVENLABS_API_KEY ?? null,
     dataRoot: Bun.env.DATA_ROOT ?? "/data",
-    acpCommand: Bun.env.ACP_COMMAND ?? "codex-acp",
-    acpArgs,
+    codexCommand: Bun.env.CODEX_COMMAND ?? "codex",
+    codexArgs,
     logLevel,
     telegramPollTimeoutSeconds: parseNumber(Bun.env.TELEGRAM_POLL_TIMEOUT_SECONDS ?? "20", "TELEGRAM_POLL_TIMEOUT_SECONDS"),
   };

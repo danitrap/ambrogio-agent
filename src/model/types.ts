@@ -1,10 +1,5 @@
 import type { HydratedSkill } from "../skills/discovery";
 
-export type ToolCall = {
-  tool: "list_files" | "read_file" | "write_file" | "search";
-  args: Record<string, unknown>;
-};
-
 export type ModelRequest = {
   requestId?: string;
   message: string;
@@ -14,7 +9,6 @@ export type ModelRequest = {
 
 export type ModelResponse = {
   text: string;
-  toolCalls: ToolCall[];
 };
 
 export type ModelExecutionSummary = {

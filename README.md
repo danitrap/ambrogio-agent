@@ -8,12 +8,6 @@ Personal-only agent wrapper for Telegram with a secure `/data` boundary and Agen
 - Telegram vocal message support with transcription (`gpt-4o-mini-transcribe`)
 - Optional audio replies via ElevenLabs TTS with `/audio <prompt>` when `ELEVENLABS_API_KEY` is set
 - Single-user allowlist (`TELEGRAM_ALLOWED_USER_ID`)
-- File tools scoped to `/data` only:
-  - `list_files`
-  - `read_file`
-  - `write_file`
-  - `search`
-- Git snapshot created before every write
 - Agent Skills-compatible discovery from `/data/skills/*/SKILL.md`
 - Bootstrap automatico delle skill versionate in `./skills` verso `/data/skills` (solo mancanti)
 - Docker hardening baseline (`read_only`, `cap_drop=ALL`, `no-new-privileges`)
@@ -35,8 +29,8 @@ cp .env.example .env
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ALLOWED_USER_ID`
 - `OPENAI_API_KEY`
-- `ACP_COMMAND` (default: `codex-acp`)
-- `ACP_ARGS` (default: `--dangerously-bypass-approvals-and-sandbox -c instructions=acp_fs` inside this containerized setup)
+- `CODEX_COMMAND` (default: `codex`)
+- `CODEX_ARGS` (default: `--dangerously-bypass-approvals-and-sandbox -c instructions=codex_fs` inside this containerized setup)
 
 4. Start:
 ```bash
@@ -52,7 +46,6 @@ mkdir -p data
 docker compose up -d --build
 ```
 
-The Docker image builds and installs `codex-acp` from source during `docker compose build`.
 The `codex` CLI is installed via npm (`@openai/codex`), so ChatGPT login is available without building Codex from source.
 BuildKit cache is enabled in compose and persisted in `.docker-cache`, so later rebuilds are significantly faster.
 

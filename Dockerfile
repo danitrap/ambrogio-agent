@@ -1,22 +1,10 @@
 # syntax=docker/dockerfile:1.7
-FROM rust:1.91-alpine AS acp-builder
-
-WORKDIR /build
-
-RUN apk add --no-cache build-base git make musl-dev openssl-dev pkgconfig perl
-RUN git clone --depth 1 https://github.com/cola-io/codex-acp.git
-WORKDIR /build/codex-acp
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release
-
 FROM oven/bun:1.3.6-alpine
 
 WORKDIR /app
 
 RUN apk add --no-cache bash ffmpeg ghostscript imagemagick git nodejs npm
 RUN npm install -g @openai/codex
-COPY --from=acp-builder /build/codex-acp/target/release/codex-acp /usr/local/bin/codex-acp
 
 COPY package.json bun.lock tsconfig.json ./
 RUN bun install --frozen-lockfile

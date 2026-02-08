@@ -52,7 +52,7 @@ function unwrapFinalTags(text: string): string {
   return trimmed.replaceAll(/<\/?final>/gi, "").trim();
 }
 
-export class CodexAcpBridge implements ModelBridge {
+export class CodexBridge implements ModelBridge {
   private readonly cwd?: string;
   private readonly rootDir: string;
   private readonly envOverrides?: Record<string, string>;
@@ -67,10 +67,6 @@ export class CodexAcpBridge implements ModelBridge {
     this.cwd = options.cwd;
     this.rootDir = resolve(options.cwd ?? process.cwd());
     this.envOverrides = options.env;
-  }
-
-  private resolveExecCommand(): string {
-    return this.command === "codex-acp" ? "codex" : this.command;
   }
 
   async respond(request: ModelRequest): Promise<ModelResponse> {
@@ -91,7 +87,7 @@ export class CodexAcpBridge implements ModelBridge {
       ...(hasDangerFlag ? this.args : ["--dangerously-bypass-approvals-and-sandbox", ...this.args]),
       "-",
     ];
-    const execCommand = this.resolveExecCommand();
+    const execCommand = this.command;
     this.lastExecutionSummary = {
       requestId,
       command: execCommand,
@@ -148,7 +144,7 @@ export class CodexAcpBridge implements ModelBridge {
         promptLength: prompt.length,
         errorMessage: "exec_pipe_setup_failed",
       };
-      return { text: "Model backend unavailable right now.", toolCalls: [] };
+      return { text: "Model backend unavailable right now." };
     }
 
     const stderrPromise = new Response(stderrStream).text();
@@ -222,7 +218,7 @@ export class CodexAcpBridge implements ModelBridge {
           stdoutPreview: previewLogText(stdout),
           stderrPreview: previewLogText(stderr),
         };
-        return { text: "Model backend unavailable right now.", toolCalls: [] };
+        return { text: "Model backend unavailable right now." };
       }
 
       const responseText = unwrapFinalTags(text);
@@ -255,7 +251,7 @@ export class CodexAcpBridge implements ModelBridge {
         outputPreview: previewLogText(responseText),
       };
 
-      return { text: responseText, toolCalls: [] };
+      return { text: responseText };
     } catch (error) {
       const stderr = (await stderrPromise).trim();
       const stdout = (await stdoutPromise).trim();
@@ -287,7 +283,7 @@ export class CodexAcpBridge implements ModelBridge {
         stderrPreview: previewLogText(stderr),
         errorMessage: message,
       };
-      return { text: "Model backend unavailable right now.", toolCalls: [] };
+      return { text: "Model backend unavailable right now." };
     } finally {
       if (abortSignal) {
         abortSignal.removeEventListener("abort", abortHandler);

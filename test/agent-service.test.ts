@@ -14,76 +14,16 @@ class FakeSkills {
   }
 }
 
-class FakeSnapshots {
-  public calls: string[] = [];
-
-  createSnapshot(reason: string): string {
-    this.calls.push(reason);
-    return "abc123";
-  }
-}
-
-class FakeFsTools {
-  async listFiles(): Promise<unknown[]> {
-    return [];
-  }
-
-  async readFile(path: string): Promise<{ path: string; content: string; sha256: string }> {
-    return { path, content: "", sha256: "" };
-  }
-
-  async search(): Promise<unknown[]> {
-    return [];
-  }
-
-  async writeFile(path: string, content: string): Promise<{ path: string; newSha256: string }> {
-    return { path, newSha256: `${content.length}` };
-  }
-}
-
 describe("AgentService", () => {
-  test("takes snapshot before write_file operations", async () => {
-    const model: ModelBridge = {
-      respond: async () => ({
-        text: "ok",
-        toolCalls: [
-          {
-            tool: "write_file",
-            args: {
-              path: "grocery.md",
-              content: "milk",
-            },
-          },
-        ],
-      }),
-    };
-
-    const snapshots = new FakeSnapshots();
-    const service = new AgentService({
-      allowlist: new TelegramAllowlist(1),
-      modelBridge: model,
-      skills: new FakeSkills() as never,
-      fsTools: new FakeFsTools() as never,
-      snapshots: snapshots as never,
-      logger: new Logger("error"),
-    });
-
-    const result = await service.handleMessage(1, "add milk");
-    expect(snapshots.calls).toEqual(["add milk"]);
-    expect(result).toContain("snapshotCommit");
-  });
-
   test("denies unauthorized users", async () => {
     const model: ModelBridge = {
-      respond: async () => ({ text: "ok", toolCalls: [] }),
+      respond: async () => ({ text: "ok" }),
     };
 
     const service = new AgentService({
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
       skills: new FakeSkills() as never,
-      fsTools: new FakeFsTools() as never,
-      snapshots: new FakeSnapshots() as never,
       logger: new Logger("error"),
     });
 
@@ -96,7 +36,7 @@ describe("AgentService", () => {
     const model: ModelBridge = {
       respond: async (request) => {
         seenMessages.push(request.message);
-        return { text: "ok", toolCalls: [] };
+        return { text: "ok" };
       },
     };
 
@@ -104,8 +44,6 @@ describe("AgentService", () => {
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
       skills: new FakeSkills() as never,
-      fsTools: new FakeFsTools() as never,
-      snapshots: new FakeSnapshots() as never,
       logger: new Logger("error"),
     });
 
@@ -126,7 +64,7 @@ describe("AgentService", () => {
     const model: ModelBridge = {
       respond: async (request) => {
         seenMessages.push(request.message);
-        return { text: "ok", toolCalls: [] };
+        return { text: "ok" };
       },
     };
 
@@ -134,8 +72,6 @@ describe("AgentService", () => {
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
       skills: new FakeSkills() as never,
-      fsTools: new FakeFsTools() as never,
-      snapshots: new FakeSnapshots() as never,
       logger: new Logger("error"),
     });
 
@@ -150,15 +86,13 @@ describe("AgentService", () => {
 
   test("reports conversation stats for a user", async () => {
     const model: ModelBridge = {
-      respond: async () => ({ text: "ok", toolCalls: [] }),
+      respond: async () => ({ text: "ok" }),
     };
 
     const service = new AgentService({
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
       skills: new FakeSkills() as never,
-      fsTools: new FakeFsTools() as never,
-      snapshots: new FakeSnapshots() as never,
       logger: new Logger("error"),
     });
 

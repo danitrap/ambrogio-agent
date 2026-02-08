@@ -3,10 +3,10 @@
 ## Project Structure & Module Organization
 Core application code lives in `src/`, grouped by responsibility:
 - `src/app/` service orchestration (`AgentService`)
-- `src/auth/`, `src/tools/`, `src/skills/`, `src/model/`, `src/telegram/`, `src/logging/`
+- `src/auth/`, `src/skills/`, `src/model/`, `src/telegram/`, `src/logging/`
 - `src/main.ts` process entrypoint
 
-Tests live in `test/` as Bun test files (for example, `test/fs-tools.test.ts`). Runtime data and snapshots are mounted under `data/`. Skills are discovered from both `data/skills/` and `data/.codex/skills/` (via `CODEX_HOME`). Design notes and planning docs are in `docs/plans/`.
+Tests live in `test/` as Bun test files (for example, `test/agent-service.test.ts`). Runtime data is mounted under `data/`. Skills are discovered from both `data/skills/` and `data/.codex/skills/` (via `CODEX_HOME`). Design notes and planning docs are in `docs/plans/`.
 
 ## Build, Test, and Development Commands
 - `bun install`: install dependencies.
@@ -38,4 +38,4 @@ PRs should include:
 - config or operational notes (`.env`, Docker, `data/` impacts).
 
 ## Security & Configuration Tips
-Never commit secrets. Copy `.env.example` to `.env` locally and set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID`. Keep file operations inside the `/data` boundary and preserve snapshot-on-write behavior.
+Never commit secrets. Copy `.env.example` to `.env` locally and set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID`.

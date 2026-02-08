@@ -6,16 +6,14 @@ import { TelegramAllowlist } from "./auth/allowlist";
 import { AgentService } from "./app/agent-service";
 import { loadConfig } from "./config/env";
 import { Logger } from "./logging/audit";
-import { CodexAcpBridge } from "./model/codex-acp-bridge";
+import { CodexBridge } from "./model/codex-bridge";
 import { ElevenLabsTts } from "./model/elevenlabs-tts";
 import { OpenAiTranscriber } from "./model/openai-transcriber";
-import { GitSnapshotManager } from "./snapshots/git";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
 import { parseTelegramCommand } from "./telegram/commands";
 import { parseTelegramResponse } from "./telegram/response-mode";
-import { FsTools } from "./tools/fs-tools";
 
 const TYPING_INTERVAL_MS = 4_000;
 const MODEL_TIMEOUT_MS = 180_000;
@@ -45,7 +43,7 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`;
 }
 
-function buildLastLogMessage(summary: ReturnType<CodexAcpBridge["getLastExecutionSummary"]>): string {
+function buildLastLogMessage(summary: ReturnType<CodexBridge["getLastExecutionSummary"]>): string {
   if (!summary) {
     return "Nessuna esecuzione codex disponibile ancora.";
   }
@@ -397,12 +395,7 @@ async function main(): Promise<void> {
 
   const telegram = new TelegramAdapter(config.telegramBotToken);
   const allowlist = new TelegramAllowlist(config.telegramAllowedUserId);
-  const fsTools = new FsTools({ root: config.dataRoot });
-  await fsTools.init();
   const dataRootRealPath = await realpath(config.dataRoot);
-
-  const snapshots = new GitSnapshotManager(config.dataRoot);
-  await snapshots.init();
 
   const projectSkillsRoot = Bun.env.PROJECT_SKILLS_ROOT ?? path.resolve(import.meta.dir, "..", "skills");
   const dataSkillsRoot = `${config.dataRoot}/skills`;
@@ -425,7 +418,7 @@ async function main(): Promise<void> {
     dataSkillsRoot,
     `${codexHome}/skills`,
   ]);
-  const modelBridge = new CodexAcpBridge(config.acpCommand, config.acpArgs, logger, {
+  const modelBridge = new CodexBridge(config.codexCommand, config.codexArgs, logger, {
     cwd: config.dataRoot,
     env: {
       CODEX_HOME: codexHome,
@@ -441,14 +434,12 @@ async function main(): Promise<void> {
     allowlist,
     modelBridge,
     skills,
-    fsTools,
-    snapshots,
     logger,
   });
 
   logger.info("agent_started", {
     dataRoot: config.dataRoot,
-    acpCommand: config.acpCommand,
+    codexCommand: config.codexCommand,
   });
 
   let offset = 0;
@@ -516,7 +507,7 @@ async function main(): Promise<void> {
                 `Uptime: ${uptime}`,
                 `Handled messages: ${handledMessages}`,
                 `Failed messages: ${failedMessages}`,
-                `Backend command: ${config.acpCommand}`,
+                `Backend command: ${config.codexCommand}`,
                 `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
               ];
               await sendCommandReply(lines.join("\n"));
