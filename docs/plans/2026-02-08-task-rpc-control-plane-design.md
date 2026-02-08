@@ -35,7 +35,7 @@ UDS keeps the control plane local and non-network exposed by default. JSONL RPC 
 
 ### Socket
 
-- Path: `/data/runtime/ambrogio.sock`
+- Path: `/tmp/ambrogio-agent.sock` (override via `AMBROGIO_SOCKET_PATH`)
 - Lifecycle:
   - remove stale socket on startup
   - bind and listen during runtime

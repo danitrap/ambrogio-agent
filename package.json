@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "bun run src/main.ts",
     "start": "bun run src/main.ts",
+    "ctl": "bun run src/cli/ambrogioctl.ts",
     "typecheck": "bunx tsc --noEmit",
     "test": "bun test"
   },

@@ -108,6 +108,23 @@ When runtime tasks and TODO intents are ambiguous, the agent asks explicit confi
 
 Legacy commands (`/tasks`, `/task <id>`, `/retrytask <id>`, `/canceltask <id>`) remain available for debugging.
 
+### Local Task RPC (for skills/tools)
+
+Ambrogio exposes a local Unix-socket task RPC server:
+
+- Socket path: `/tmp/ambrogio-agent.sock` (override with `AMBROGIO_SOCKET_PATH`)
+- Protocol: one-line JSON request/response envelopes (`ok/result` or `ok=false/error`)
+
+CLI client:
+
+```bash
+bun run ctl -- tasks list --json
+bun run ctl -- tasks inspect --id <task-id> --json
+bun run ctl -- tasks create --run-at 2099-01-01T10:00:00.000Z --prompt "..." --user-id 123 --chat-id 123 --json
+bun run ctl -- tasks cancel --id <task-id> --json
+bun run ctl -- tasks retry --id <task-id> --json
+```
+
 Example `HEARTBEAT.md`:
 
 ```md

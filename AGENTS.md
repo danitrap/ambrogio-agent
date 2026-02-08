@@ -65,3 +65,4 @@ Never commit secrets. Copy `.env.example` to `.env` locally and set `TELEGRAM_BO
 - Natural-language task management must cover listing, inspection, retry, and cancellation of runtime tasks.
 - If runtime-task intent vs TODO intent is ambiguous, runtime must ask explicit confirmation before executing.
 - `/tasks`, `/task <id>`, `/retrytask <id>`, and `/canceltask <id>` are legacy debug commands and should not be required for normal operation.
+- Runtime exposes a local task RPC control plane on Unix socket (`/tmp/ambrogio-agent.sock`, override with `AMBROGIO_SOCKET_PATH`) for tools/skills integration.

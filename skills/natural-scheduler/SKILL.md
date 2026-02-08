@@ -1,33 +1,60 @@
 ---
 name: natural-scheduler
-description: Parse natural-language runtime-task or TODO requests into strict JSON for scheduler/task routing.
+description: Manage runtime tasks in natural language by calling ambrogioctl over the local task RPC socket.
 ---
 
 # Natural Scheduler
 
-Convert user natural-language task/TODO requests into a strict JSON object for runtime routing.
+Handle runtime task operations directly from natural-language requests.
 
-## Output Contract
+## Scope
 
-Return JSON only with this shape:
+- Runtime tasks only (`delayed/background` tasks handled by Ambrogio).
+- For TODO list operations, delegate to the `todo-manager` skill.
 
-```json
-{"domain":"runtime_task|todo|none","action":"schedule|cancel|list|inspect|retry|none","intent":"schedule|cancel|none","confidence":0.0,"runAtIso":"","taskPrompt":"","taskId":"","needsConfirmation":false,"confirmationQuestion":""}
-```
+## Hard Rules
 
-## Rules
+- Do not output JSON to the user.
+- Do not invent task IDs.
+- Always execute task operations through `ambrogioctl`.
+- If request is ambiguous between runtime task and TODO, ask explicit confirmation before executing.
 
-- Use the provided local timezone and current timestamp from the runtime prompt.
-- `domain=runtime_task` for delayed/background task actions.
-- `domain=todo` for TODO/checklist actions.
-- `action=list|inspect|retry` are runtime task management actions.
-- `intent=schedule` only when timing and requested action are explicit enough.
-- For `schedule`:
-  - set `runAtIso` to an absolute ISO datetime.
-  - set `taskPrompt` to the exact task the agent should execute later.
-- For cancellation:
-  - use `intent=cancel`.
-  - set `taskId` if explicitly provided by the user.
-- If domain/action are ambiguous (especially runtime task vs TODO), set `needsConfirmation=true` and provide a concise `confirmationQuestion`.
-- If uncertain, return `intent=none` and lower `confidence`.
-- Never output markdown or prose.
+## CLI Path Resolution
+
+Use one of these commands (in order):
+
+1. `bun run /app/src/cli/ambrogioctl.ts ...` (Docker runtime)
+2. `bun run /data/../src/cli/ambrogioctl.ts ...` (local dev from `/data`)
+
+Always append `--json` and parse results before replying.
+
+## Supported Intents (Runtime Tasks)
+
+- List tasks:
+  - `... tasks list --json`
+- Inspect task:
+  - `... tasks inspect --id <taskId> --json`
+- Create delayed task:
+  - `... tasks create --run-at <ISO> --prompt "<text>" --user-id <id> --chat-id <id> --json`
+- Cancel task:
+  - `... tasks cancel --id <taskId> --json`
+- Retry delivery:
+  - `... tasks retry --id <taskId> --json`
+
+## Time Handling
+
+- Convert natural-time requests to absolute ISO timestamp before `tasks create`.
+- If time is missing/ambiguous, ask for clarification.
+- If user says "tra X minuti", compute from current local time and confirm the resolved schedule in response.
+
+## Disambiguation Policy
+
+- If user says generic "lista", "task", "promemoria", "todo" and domain is unclear:
+  - Ask: "Vuole i task runtime o la TODO list?"
+- Execute only after explicit user confirmation.
+
+## Response Style
+
+- Keep response concise and user-facing.
+- Include task ID when action creates/cancels/retries a specific task.
+- For list operations, summarize top entries and key statuses.
