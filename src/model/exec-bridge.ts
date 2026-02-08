@@ -42,15 +42,6 @@ function buildPromptText(request: ModelRequest): string {
   return `${personaContract}\n${responseContract}\n\nUser request:\n${request.message}`;
 }
 
-function unwrapFinalTags(text: string): string {
-  const trimmed = text.trim();
-  const tagged = trimmed.match(/^<final>([\s\S]*?)<\/final>$/i);
-  if (tagged && tagged[1]) {
-    return tagged[1].trim();
-  }
-  return trimmed.replaceAll(/<\/?final>/gi, "").trim();
-}
-
 function compactDetail(value: string, max = 220): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
   if (normalized.length <= max) {
@@ -278,7 +269,7 @@ export class ExecBridge implements ModelBridge {
         return { text: "Model backend unavailable right now." };
       }
 
-      const responseText = unwrapFinalTags(text);
+      const responseText = text.trim();
       const durationMs = Date.now() - startedAt;
       this.logger.info("codex_exec_completed", {
         ...correlationFields({ requestId }),

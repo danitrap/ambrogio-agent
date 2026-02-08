@@ -359,8 +359,6 @@ async function main(): Promise<void> {
           chatId: task.chatId,
         },
         rawReply: task.deliveryText,
-        maxTelegramDocumentBytes: MAX_TELEGRAM_DOCUMENT_BYTES,
-        generatedScannedPdfsRelativeDir: GENERATED_SCANNED_PDFS_RELATIVE_DIR,
         logContext: { command: task.command ?? "background" },
         onTextSent: async (text) => {
           await recordRecentTelegramEntry(
@@ -904,8 +902,6 @@ async function main(): Promise<void> {
               noTtsPrefix: options.noTtsPrefix,
               forceAudio: options.forceAudio,
               logContext: { command: options.command },
-              maxTelegramDocumentBytes: MAX_TELEGRAM_DOCUMENT_BYTES,
-              generatedScannedPdfsRelativeDir: GENERATED_SCANNED_PDFS_RELATIVE_DIR,
               onTextSent: async (text) => {
                 await recordRecentTelegramEntry("assistant", text);
               },
@@ -1052,8 +1048,6 @@ async function main(): Promise<void> {
           rootRealPath: dataRootRealPath,
           update,
           rawReply: reply,
-          maxTelegramDocumentBytes: MAX_TELEGRAM_DOCUMENT_BYTES,
-          generatedScannedPdfsRelativeDir: GENERATED_SCANNED_PDFS_RELATIVE_DIR,
           onTextSent: async (text) => {
             await recordRecentTelegramEntry("assistant", text);
           },
