@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { AttachmentService, type ProcessedAttachment } from "./attachments/attachment-service";
 import { TelegramAllowlist } from "./auth/allowlist";
 import { AgentService } from "./app/agent-service";
 import { loadConfig } from "./config/env";
@@ -18,6 +19,7 @@ import { FsTools } from "./tools/fs-tools";
 const TYPING_INTERVAL_MS = 4_000;
 const MODEL_TIMEOUT_MS = 180_000;
 const MAX_TELEGRAM_AUDIO_BYTES = 49_000_000;
+const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
 
 function previewText(value: string, max = 160): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
@@ -212,6 +214,7 @@ async function main(): Promise<void> {
     },
   });
   const transcriber = new OpenAiTranscriber(config.openaiApiKey);
+  const attachmentService = new AttachmentService(config.dataRoot, MAX_INLINE_ATTACHMENT_TEXT_BYTES);
   const tts = config.elevenLabsApiKey ? new ElevenLabsTts(config.elevenLabsApiKey) : null;
 
   const agent = new AgentService({
@@ -245,6 +248,7 @@ async function main(): Promise<void> {
           textLength: update.text?.length ?? 0,
           textPreview: update.text ? previewText(update.text) : undefined,
           hasVoice: update.voiceFileId !== null,
+          attachmentCount: update.attachments.length,
         });
 
         const command = update.text ? parseTelegramCommand(update.text) : null;
@@ -541,7 +545,7 @@ async function main(): Promise<void> {
         let reply: string;
         let promptText = update.text;
 
-        if (!promptText && update.voiceFileId && !allowlist.isAllowed(update.userId)) {
+        if (!promptText && (update.voiceFileId || update.attachments.length > 0) && !allowlist.isAllowed(update.userId)) {
           const outbound = "Unauthorized user.";
           await telegram.sendMessage(update.chatId, outbound);
           logger.info("telegram_message_sent", {
@@ -564,6 +568,44 @@ async function main(): Promise<void> {
           typingController.signal,
         );
         try {
+          const processedAttachments: ProcessedAttachment[] = [];
+          for (let index = 0; index < update.attachments.length; index += 1) {
+            const attachment = update.attachments[index];
+            if (!attachment) {
+              continue;
+            }
+            try {
+              const download = await telegram.downloadFileById(attachment.fileId);
+              const processed = await attachmentService.processIncoming({
+                attachment,
+                download,
+                updateId: update.updateId,
+                sequence: index,
+              });
+              processedAttachments.push(processed);
+              logger.info("telegram_attachment_saved", {
+                updateId: update.updateId,
+                userId: update.userId,
+                chatId: update.chatId,
+                kind: processed.kind,
+                relativePath: processed.relativePath,
+                sizeBytes: processed.sizeBytes,
+                inlineText: processed.inlineText !== null,
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              logger.warn("telegram_attachment_processing_failed", {
+                updateId: update.updateId,
+                userId: update.userId,
+                chatId: update.chatId,
+                attachmentKind: attachment.kind,
+                message,
+              });
+            }
+          }
+
+          const attachmentContext = attachmentService.buildPromptContext(processedAttachments);
+
           if (!promptText && update.voiceFileId) {
             const audio = await telegram.downloadFileById(update.voiceFileId);
             promptText = await transcriber.transcribe(audio.fileBlob, audio.fileName, audio.mimeType ?? update.voiceMimeType);
@@ -576,8 +618,15 @@ async function main(): Promise<void> {
             });
           }
 
+          if (attachmentContext) {
+            const basePrompt = promptText ?? "Analizza gli allegati salvati e proponi i prossimi passi.";
+            promptText = [attachmentContext, "", "User message:", basePrompt].join("\n");
+          }
+
           if (!promptText) {
-            reply = "Posso gestire solo messaggi testuali o vocali.";
+            reply = update.attachments.length > 0
+              ? "Non riesco a processare l'allegato inviato."
+              : "Posso gestire solo messaggi testuali o vocali.";
           } else {
             reply = await withTimeout(agent.handleMessage(update.userId, promptText, String(update.updateId)), MODEL_TIMEOUT_MS);
             handledMessages += 1;

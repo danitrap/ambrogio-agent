@@ -38,7 +38,64 @@ describe("TelegramAdapter", () => {
       text: null,
       voiceFileId: "voice-file-id",
       voiceMimeType: "audio/ogg",
+      attachments: [],
     });
+  });
+
+  test("parses document and photo attachments from updates", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      ok: true,
+      result: [
+        {
+          update_id: 21,
+          message: {
+            from: { id: 1 },
+            chat: { id: 2 },
+            text: "guarda allegato",
+            document: {
+              file_id: "doc-1",
+              file_name: "readme.md",
+              mime_type: "text/markdown",
+              file_size: 42,
+            },
+          },
+        },
+        {
+          update_id: 22,
+          message: {
+            from: { id: 1 },
+            chat: { id: 2 },
+            photo: [
+              { file_id: "small", file_size: 10, width: 100, height: 100 },
+              { file_id: "large", file_size: 100, width: 1000, height: 1000 },
+            ],
+          },
+        },
+      ],
+    }), { status: 200 })) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter("token");
+    const updates = await adapter.getUpdates(0, 10);
+
+    expect(updates).toHaveLength(2);
+    expect(updates[0]?.attachments).toEqual([
+      {
+        kind: "document",
+        fileId: "doc-1",
+        fileName: "readme.md",
+        mimeType: "text/markdown",
+        fileSize: 42,
+      },
+    ]);
+    expect(updates[1]?.attachments).toEqual([
+      {
+        kind: "photo",
+        fileId: "large",
+        fileName: null,
+        mimeType: null,
+        fileSize: 100,
+      },
+    ]);
   });
 
   test("downloads telegram file by file id", async () => {

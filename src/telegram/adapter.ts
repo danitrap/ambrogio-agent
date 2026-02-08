@@ -1,3 +1,11 @@
+export type TelegramAttachment = {
+  kind: "document" | "photo";
+  fileId: string;
+  fileName: string | null;
+  mimeType: string | null;
+  fileSize: number | null;
+};
+
 export type TelegramMessage = {
   updateId: number;
   chatId: number;
@@ -5,6 +13,7 @@ export type TelegramMessage = {
   text: string | null;
   voiceFileId: string | null;
   voiceMimeType: string | null;
+  attachments: TelegramAttachment[];
 };
 
 export type TelegramDownload = {
@@ -49,6 +58,18 @@ export class TelegramAdapter {
             file_id?: string;
             mime_type?: string;
           };
+          document?: {
+            file_id?: string;
+            file_name?: string;
+            mime_type?: string;
+            file_size?: number;
+          };
+          photo?: Array<{
+            file_id?: string;
+            file_size?: number;
+            width?: number;
+            height?: number;
+          }>;
           from?: { id?: number };
           chat?: { id?: number };
         };
@@ -64,12 +85,36 @@ export class TelegramAdapter {
         const text = item.message?.text;
         const voiceFileId = item.message?.voice?.file_id;
         const voiceMimeType = item.message?.voice?.mime_type;
+        const document = item.message?.document;
+        const photos = item.message?.photo;
         const userId = item.message?.from?.id;
         const chatId = item.message?.chat?.id;
         const hasText = typeof text === "string";
         const hasVoice = typeof voiceFileId === "string";
+        const attachments: TelegramAttachment[] = [];
+        if (typeof document?.file_id === "string") {
+          attachments.push({
+            kind: "document",
+            fileId: document.file_id,
+            fileName: typeof document.file_name === "string" ? document.file_name : null,
+            mimeType: typeof document.mime_type === "string" ? document.mime_type : null,
+            fileSize: typeof document.file_size === "number" ? document.file_size : null,
+          });
+        }
+        if (Array.isArray(photos) && photos.length > 0) {
+          const bestPhoto = photos[photos.length - 1];
+          if (bestPhoto && typeof bestPhoto.file_id === "string") {
+            attachments.push({
+              kind: "photo",
+              fileId: bestPhoto.file_id,
+              fileName: null,
+              mimeType: null,
+              fileSize: typeof bestPhoto.file_size === "number" ? bestPhoto.file_size : null,
+            });
+          }
+        }
 
-        if ((!hasText && !hasVoice) || typeof userId !== "number" || typeof chatId !== "number") {
+        if ((!hasText && !hasVoice && attachments.length === 0) || typeof userId !== "number" || typeof chatId !== "number") {
           return null;
         }
 
@@ -80,6 +125,7 @@ export class TelegramAdapter {
           text: hasText ? text : null,
           voiceFileId: hasVoice ? voiceFileId : null,
           voiceMimeType: typeof voiceMimeType === "string" ? voiceMimeType : null,
+          attachments,
         } satisfies TelegramMessage;
       })
       .filter((message): message is TelegramMessage => message !== null);
