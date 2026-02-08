@@ -30,7 +30,8 @@ function buildPromptText(request: ModelRequest): string {
     "- Do not include planning/debug/internal reasoning.\n" +
     "- Use available Codex tools (especially shell/apply_patch) when useful, then report the concrete result.\n" +
     "- Keep the answer concise and actionable.\n" +
-    "- Wrap only your final answer inside <final>...</final> tags.";
+    "- Wrap only your final answer inside <final>...</final> tags.\n" +
+    "- Do not invent custom XML-like tags. Use only these runtime tags when needed: <response_mode>audio|text</response_mode> and <telegram_document>...</telegram_document>.";
 
   if (request.skills.length === 0) {
     return `${personaContract}\n${responseContract}\n\nUser request:\n${request.message}`;
@@ -52,7 +53,7 @@ function unwrapFinalTags(text: string): string {
   return trimmed.replaceAll(/<\/?final>/gi, "").trim();
 }
 
-export class CodexBridge implements ModelBridge {
+export class ExecBridge implements ModelBridge {
   private readonly cwd?: string;
   private readonly rootDir: string;
   private readonly envOverrides?: Record<string, string>;

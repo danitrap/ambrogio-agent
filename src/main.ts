@@ -6,9 +6,12 @@ import { TelegramAllowlist } from "./auth/allowlist";
 import { AgentService } from "./app/agent-service";
 import { loadConfig } from "./config/env";
 import { Logger } from "./logging/audit";
-import { CodexBridge } from "./model/codex-bridge";
+import { ExecBridge } from "./model/exec-bridge";
 import { ElevenLabsTts } from "./model/elevenlabs-tts";
 import { OpenAiTranscriber } from "./model/openai-transcriber";
+import { runAgentRequestWithTimeout } from "./runtime/agent-request";
+import { handleTelegramCommand } from "./runtime/command-handlers";
+import { sendTelegramTextReply } from "./runtime/message-sender";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
@@ -43,7 +46,7 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`;
 }
 
-function buildLastLogMessage(summary: ReturnType<CodexBridge["getLastExecutionSummary"]>): string {
+function buildLastLogMessage(summary: ReturnType<ExecBridge["getLastExecutionSummary"]>): string {
   if (!summary) {
     return "Nessuna esecuzione codex disponibile ancora.";
   }
@@ -342,15 +345,13 @@ async function dispatchAssistantReply(params: {
         mode: wantsAudio ? "audio" : parsed.mode,
         ...params.logContext,
       });
-      await params.telegram.sendMessage(params.update.chatId, outbound);
-      params.logger.info("telegram_message_sent", {
-        updateId: params.update.updateId,
-        userId: params.update.userId,
-        chatId: params.update.chatId,
-        textLength: outbound.length,
-        textPreview: previewText(outbound),
-        mode: "text_fallback",
-        ...params.logContext,
+      await sendTelegramTextReply({
+        telegram: params.telegram,
+        logger: params.logger,
+        update: params.update,
+        text: outbound,
+        command: params.logContext?.command,
+        extraLogFields: { mode: "text_fallback" },
       });
       return;
     }
@@ -358,28 +359,24 @@ async function dispatchAssistantReply(params: {
 
   if (wantsAudio && !params.tts && params.noTtsPrefix) {
     const fallback = `${params.noTtsPrefix}\n\n${outbound}`.slice(0, 4000);
-    await params.telegram.sendMessage(params.update.chatId, fallback);
-    params.logger.info("telegram_message_sent", {
-      updateId: params.update.updateId,
-      userId: params.update.userId,
-      chatId: params.update.chatId,
-      textLength: fallback.length,
-      textPreview: previewText(fallback),
-      mode: "text_fallback_no_tts",
-      ...params.logContext,
+    await sendTelegramTextReply({
+      telegram: params.telegram,
+      logger: params.logger,
+      update: params.update,
+      text: fallback,
+      command: params.logContext?.command,
+      extraLogFields: { mode: "text_fallback_no_tts" },
     });
     return;
   }
 
-  await params.telegram.sendMessage(params.update.chatId, outbound);
-  params.logger.info("telegram_message_sent", {
-    updateId: params.update.updateId,
-    userId: params.update.userId,
-    chatId: params.update.chatId,
-    textLength: outbound.length,
-    textPreview: previewText(outbound),
-    mode: parsed.mode,
-    ...params.logContext,
+  await sendTelegramTextReply({
+    telegram: params.telegram,
+    logger: params.logger,
+    update: params.update,
+    text: outbound,
+    command: params.logContext?.command,
+    extraLogFields: { mode: parsed.mode },
   });
 }
 
@@ -418,7 +415,7 @@ async function main(): Promise<void> {
     dataSkillsRoot,
     `${codexHome}/skills`,
   ]);
-  const modelBridge = new CodexBridge(config.codexCommand, config.codexArgs, logger, {
+  const modelBridge = new ExecBridge(config.codexCommand, config.codexArgs, logger, {
     cwd: config.dataRoot,
     env: {
       CODEX_HOME: codexHome,
@@ -463,335 +460,225 @@ async function main(): Promise<void> {
         });
 
         const command = update.text ? parseTelegramCommand(update.text) : null;
-        if (command) {
-          const sendCommandReply = async (outbound: string): Promise<void> => {
-            await telegram.sendMessage(update.chatId, outbound.slice(0, 4000));
-            logger.info("telegram_message_sent", {
+        const sendCommandReply = async (outbound: string): Promise<void> => {
+          await sendTelegramTextReply({
+            telegram,
+            logger,
+            update,
+            text: outbound,
+            command: command?.name,
+          });
+        };
+        const executePrompt = async (prompt: string, commandName: string) => {
+          const result = await runAgentRequestWithTimeout({
+            logger,
+            update,
+            timeoutMs: MODEL_TIMEOUT_MS,
+            command: commandName,
+            operation: () =>
+              runWithTypingAndTimeout({
+                telegram,
+                logger,
+                chatId: update.chatId,
+                updateId: update.updateId,
+                userId: update.userId,
+                timeoutMs: MODEL_TIMEOUT_MS,
+                operation: (signal) => agent.handleMessage(update.userId, prompt, String(update.updateId), signal),
+              }),
+          });
+          if (result.ok) {
+            handledMessages += 1;
+          } else {
+            failedMessages += 1;
+          }
+          return result;
+        };
+        const commandHandled = await handleTelegramCommand({
+          command,
+          update,
+          isAllowed: (userId) => allowlist.isAllowed(userId),
+          sendCommandReply,
+          getStatusReply: () => {
+            const uptime = formatDuration(Date.now() - startedAtMs);
+            const summary = modelBridge.getLastExecutionSummary();
+            const lines = [
+              "Agent status:",
+              `Uptime: ${uptime}`,
+              `Handled messages: ${handledMessages}`,
+              `Failed messages: ${failedMessages}`,
+              `Backend command: ${config.codexCommand}`,
+              `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
+            ];
+            return lines.join("\n");
+          },
+          getLastLogReply: () => buildLastLogMessage(modelBridge.getLastExecutionSummary()),
+          getMemoryReply: (userId) => {
+            const stats = agent.getConversationStats(userId);
+            const lines = [
+              "Conversation memory:",
+              `Entries: ${stats.entries}`,
+              `User turns: ${stats.userTurns}`,
+              `Assistant turns: ${stats.assistantTurns}`,
+              `Has context: ${stats.hasContext ? "yes" : "no"}`,
+            ];
+            return lines.join("\n");
+          },
+          getSkillsReply: async () => {
+            const discovered = await skills.discover();
+            if (discovered.length === 0) {
+              return "Nessuna skill disponibile in /data/skills o /data/.codex/skills.";
+            }
+            const lines = [
+              "Skills disponibili:",
+              ...discovered.map((skill, index) => {
+                const description = skill.description.replaceAll(/\s+/g, " ").trim();
+                return `${index + 1}. ${skill.id} - ${description}`;
+              }),
+            ];
+            return lines.join("\n");
+          },
+          getLastPrompt: (userId) => lastPromptByUser.get(userId),
+          setLastPrompt: (userId, prompt) => {
+            lastPromptByUser.set(userId, prompt);
+          },
+          clearConversation: (userId) => {
+            agent.clearConversation(userId);
+            logger.info("conversation_cleared", {
+              updateId: update.updateId,
+              userId,
+              chatId: update.chatId,
+            });
+          },
+          executePrompt,
+          dispatchAssistantReply: async (reply, options) => {
+            await dispatchAssistantReply({
+              telegram,
+              logger,
+              tts,
+              rootRealPath: dataRootRealPath,
+              update,
+              rawReply: reply,
+              noTtsPrefix: options.noTtsPrefix,
+              forceAudio: options.forceAudio,
+              logContext: { command: options.command },
+            });
+          },
+          sendAudioFile: async (inputPath: string) => {
+            const { realPath, relativePath } = await resolveAudioPathForUpload(dataRootRealPath, inputPath);
+            const fileBlob = Bun.file(realPath);
+            await telegram.sendAudio(update.chatId, fileBlob, path.basename(relativePath), `File: ${relativePath}`);
+            logger.info("telegram_audio_sent", {
               updateId: update.updateId,
               userId: update.userId,
               chatId: update.chatId,
-              textLength: outbound.length,
-              textPreview: previewText(outbound),
-              command: command.name,
+              filePath: relativePath,
             });
-          };
-
-          if (!allowlist.isAllowed(update.userId)) {
-            await sendCommandReply("Unauthorized user.");
-            continue;
-          }
-
-          switch (command.name) {
-            case "help": {
-              await sendCommandReply(
-                [
-                  "Comandi disponibili:",
-                  "/help - mostra questo aiuto",
-                  "/status - stato runtime agente",
-                  "/lastlog - ultimo riepilogo codex exec",
-                  "/retry - riesegue l'ultimo prompt utente",
-                  "/audio <prompt> - esegue il prompt e risponde in audio",
-                  "/memory - stato memoria conversazione",
-                  "/skills - lista skills disponibili",
-                  "/clear - cancella memoria conversazione",
-                  "/sendaudio <path> - invia un file audio da /data",
-                ].join("\n"),
-              );
-              continue;
-            }
-            case "status": {
-              const uptime = formatDuration(Date.now() - startedAtMs);
-              const summary = modelBridge.getLastExecutionSummary();
-              const lines = [
-                "Agent status:",
-                `Uptime: ${uptime}`,
-                `Handled messages: ${handledMessages}`,
-                `Failed messages: ${failedMessages}`,
-                `Backend command: ${config.codexCommand}`,
-                `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
-              ];
-              await sendCommandReply(lines.join("\n"));
-              continue;
-            }
-            case "lastlog": {
-              await sendCommandReply(buildLastLogMessage(modelBridge.getLastExecutionSummary()));
-              continue;
-            }
-            case "memory": {
-              const stats = agent.getConversationStats(update.userId);
-              const lines = [
-                "Conversation memory:",
-                `Entries: ${stats.entries}`,
-                `User turns: ${stats.userTurns}`,
-                `Assistant turns: ${stats.assistantTurns}`,
-                `Has context: ${stats.hasContext ? "yes" : "no"}`,
-              ];
-              await sendCommandReply(lines.join("\n"));
-              continue;
-            }
-            case "skills": {
-              const discovered = await skills.discover();
-              if (discovered.length === 0) {
-                await sendCommandReply("Nessuna skill disponibile in /data/skills o /data/.codex/skills.");
-                continue;
-              }
-
-              const lines = [
-                "Skills disponibili:",
-                ...discovered.map((skill, index) => {
-                  const description = skill.description.replaceAll(/\s+/g, " ").trim();
-                  return `${index + 1}. ${skill.id} - ${description}`;
-                }),
-              ];
-              await sendCommandReply(lines.join("\n"));
-              continue;
-            }
-            case "retry": {
-              const lastPrompt = lastPromptByUser.get(update.userId);
-              if (!lastPrompt) {
-                await sendCommandReply("Nessun prompt precedente da rieseguire.");
-                continue;
-              }
-
-              let reply: string;
-              try {
-                reply = await runWithTypingAndTimeout({
-                  telegram,
-                  logger,
-                  chatId: update.chatId,
-                  updateId: update.updateId,
-                  userId: update.userId,
-                  timeoutMs: MODEL_TIMEOUT_MS,
-                  operation: (signal) => agent.handleMessage(update.userId, lastPrompt, String(update.updateId), signal),
-                });
-                handledMessages += 1;
-              } catch (error) {
-                failedMessages += 1;
-                if (error instanceof Error && error.message === "MODEL_TIMEOUT") {
-                  logger.error("request_timed_out", {
-                    updateId: update.updateId,
-                    userId: update.userId,
-                    chatId: update.chatId,
-                    timeoutMs: MODEL_TIMEOUT_MS,
-                    command: "retry",
-                  });
-                  reply = "Model backend unavailable right now. Riprova tra poco.";
-                } else {
-                  const message = error instanceof Error ? error.message : "Unknown error";
-                  logger.error("message_processing_failed", { message, userId: update.userId, command: "retry" });
-                  reply = `Error: ${message}`;
-                }
-              }
-
-              await dispatchAssistantReply({
-                telegram,
-                logger,
-                tts,
-                rootRealPath: dataRootRealPath,
-                update,
-                rawReply: reply,
-                logContext: { command: "retry" },
-              });
-              continue;
-            }
-            case "audio": {
-              if (!command.args) {
-                await sendCommandReply("Usage: /audio <prompt>");
-                continue;
-              }
-
-              let reply: string;
-              try {
-                reply = await runWithTypingAndTimeout({
-                  telegram,
-                  logger,
-                  chatId: update.chatId,
-                  updateId: update.updateId,
-                  userId: update.userId,
-                  timeoutMs: MODEL_TIMEOUT_MS,
-                  operation: (signal) => agent.handleMessage(update.userId, command.args, String(update.updateId), signal),
-                });
-                handledMessages += 1;
-                lastPromptByUser.set(update.userId, command.args);
-              } catch (error) {
-                failedMessages += 1;
-                if (error instanceof Error && error.message === "MODEL_TIMEOUT") {
-                  logger.error("request_timed_out", {
-                    updateId: update.updateId,
-                    userId: update.userId,
-                    chatId: update.chatId,
-                    timeoutMs: MODEL_TIMEOUT_MS,
-                    command: "audio",
-                  });
-                  reply = "Model backend unavailable right now. Riprova tra poco.";
-                } else {
-                  const message = error instanceof Error ? error.message : "Unknown error";
-                  logger.error("message_processing_failed", { message, userId: update.userId, command: "audio" });
-                  reply = `Error: ${message}`;
-                }
-              }
-
-              await dispatchAssistantReply({
-                telegram,
-                logger,
-                tts,
-                rootRealPath: dataRootRealPath,
-                update,
-                rawReply: reply,
-                noTtsPrefix: "ELEVENLABS_API_KEY non configurata, invio testo:",
-                forceAudio: true,
-                logContext: { command: "audio" },
-              });
-              continue;
-            }
-            case "sendaudio": {
-              try {
-                const { realPath, relativePath } = await resolveAudioPathForUpload(dataRootRealPath, command.args);
-                const fileBlob = Bun.file(realPath);
-                await telegram.sendAudio(update.chatId, fileBlob, path.basename(relativePath), `File: ${relativePath}`);
-                logger.info("telegram_audio_sent", {
-                  updateId: update.updateId,
-                  userId: update.userId,
-                  chatId: update.chatId,
-                  filePath: relativePath,
-                });
-                await sendCommandReply(`Audio inviato: ${relativePath}`);
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                logger.warn("telegram_audio_send_failed", {
-                  updateId: update.updateId,
-                  userId: update.userId,
-                  chatId: update.chatId,
-                  message,
-                });
-                await sendCommandReply(`Impossibile inviare audio: ${message}`);
-              }
-              continue;
-            }
-            case "clear":
-              agent.clearConversation(update.userId);
-              logger.info("conversation_cleared", {
-                updateId: update.updateId,
-                userId: update.userId,
-                chatId: update.chatId,
-              });
-              await sendCommandReply("Memoria conversazione cancellata.");
-              continue;
-            default: {
-              await sendCommandReply(`Comando non riconosciuto: /${command.name}. Usa /help.`);
-              continue;
-            }
-          }
+            return relativePath;
+          },
+        });
+        if (commandHandled) {
+          continue;
         }
 
         let reply: string;
         let promptText = update.text;
 
         if (!promptText && (update.voiceFileId || update.attachments.length > 0) && !allowlist.isAllowed(update.userId)) {
-          const outbound = "Unauthorized user.";
-          await telegram.sendMessage(update.chatId, outbound);
-          logger.info("telegram_message_sent", {
-            updateId: update.updateId,
-            userId: update.userId,
-            chatId: update.chatId,
-            textLength: outbound.length,
-            textPreview: previewText(outbound),
+          await sendTelegramTextReply({
+            telegram,
+            logger,
+            update,
+            text: "Unauthorized user.",
           });
           continue;
         }
 
-        try {
-          reply = await runWithTypingAndTimeout({
-            telegram,
-            logger,
-            chatId: update.chatId,
-            updateId: update.updateId,
-            userId: update.userId,
-            timeoutMs: MODEL_TIMEOUT_MS,
-            operation: async (signal) => {
-              const processedAttachments: ProcessedAttachment[] = [];
-              for (let index = 0; index < update.attachments.length; index += 1) {
-                const attachment = update.attachments[index];
-                if (!attachment) {
-                  continue;
-                }
-                try {
-                  const download = await telegram.downloadFileById(attachment.fileId);
-                  const processed = await attachmentService.processIncoming({
-                    attachment,
-                    download,
-                    updateId: update.updateId,
-                    sequence: index,
-                  });
-                  processedAttachments.push(processed);
-                  logger.info("telegram_attachment_saved", {
-                    updateId: update.updateId,
-                    userId: update.userId,
-                    chatId: update.chatId,
-                    kind: processed.kind,
-                    relativePath: processed.relativePath,
-                    sizeBytes: processed.sizeBytes,
-                    inlineText: processed.inlineText !== null,
-                  });
-                } catch (error) {
-                  const message = error instanceof Error ? error.message : String(error);
-                  logger.warn("telegram_attachment_processing_failed", {
-                    updateId: update.updateId,
-                    userId: update.userId,
-                    chatId: update.chatId,
-                    attachmentKind: attachment.kind,
-                    message,
-                  });
-                }
-              }
-
-              const attachmentContext = attachmentService.buildPromptContext(processedAttachments);
-
-              if (!promptText && update.voiceFileId) {
-                const audio = await telegram.downloadFileById(update.voiceFileId);
-                promptText = await transcriber.transcribe(audio.fileBlob, audio.fileName, audio.mimeType ?? update.voiceMimeType);
-                logger.info("telegram_voice_transcribed", {
-                  updateId: update.updateId,
-                  userId: update.userId,
-                  chatId: update.chatId,
-                  transcriptionLength: promptText.length,
-                  transcriptionPreview: previewText(promptText),
-                });
-              }
-
-              if (attachmentContext) {
-                const basePrompt = promptText ?? "Analizza gli allegati salvati e proponi i prossimi passi.";
-                promptText = [attachmentContext, "", "User message:", basePrompt].join("\n");
-              }
-
-              if (!promptText) {
-                return update.attachments.length > 0
-                  ? "Non riesco a processare l'allegato inviato."
-                  : "Posso gestire solo messaggi testuali o vocali.";
-              }
-
-              const modelReply = await agent.handleMessage(update.userId, promptText, String(update.updateId), signal);
-              handledMessages += 1;
-              lastPromptByUser.set(update.userId, promptText);
-              return modelReply;
-            },
-          });
-        } catch (error) {
-          failedMessages += 1;
-          if (error instanceof Error && error.message === "MODEL_TIMEOUT") {
-            logger.error("request_timed_out", {
+        const result = await runAgentRequestWithTimeout({
+          logger,
+          update,
+          timeoutMs: MODEL_TIMEOUT_MS,
+          operation: () =>
+            runWithTypingAndTimeout({
+              telegram,
+              logger,
+              chatId: update.chatId,
               updateId: update.updateId,
               userId: update.userId,
-              chatId: update.chatId,
               timeoutMs: MODEL_TIMEOUT_MS,
-            });
-            reply = "Model backend unavailable right now. Riprova tra poco.";
-          } else {
-            const message = error instanceof Error ? error.message : "Unknown error";
-            logger.error("message_processing_failed", { message, userId: update.userId });
-            reply = `Error: ${message}`;
-          }
+              operation: async (signal) => {
+                const processedAttachments: ProcessedAttachment[] = [];
+                for (let index = 0; index < update.attachments.length; index += 1) {
+                  const attachment = update.attachments[index];
+                  if (!attachment) {
+                    continue;
+                  }
+                  try {
+                    const download = await telegram.downloadFileById(attachment.fileId);
+                    const processed = await attachmentService.processIncoming({
+                      attachment,
+                      download,
+                      updateId: update.updateId,
+                      sequence: index,
+                    });
+                    processedAttachments.push(processed);
+                    logger.info("telegram_attachment_saved", {
+                      updateId: update.updateId,
+                      userId: update.userId,
+                      chatId: update.chatId,
+                      kind: processed.kind,
+                      relativePath: processed.relativePath,
+                      sizeBytes: processed.sizeBytes,
+                      inlineText: processed.inlineText !== null,
+                    });
+                  } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    logger.warn("telegram_attachment_processing_failed", {
+                      updateId: update.updateId,
+                      userId: update.userId,
+                      chatId: update.chatId,
+                      attachmentKind: attachment.kind,
+                      message,
+                    });
+                  }
+                }
+
+                const attachmentContext = attachmentService.buildPromptContext(processedAttachments);
+
+                if (!promptText && update.voiceFileId) {
+                  const audio = await telegram.downloadFileById(update.voiceFileId);
+                  promptText = await transcriber.transcribe(audio.fileBlob, audio.fileName, audio.mimeType ?? update.voiceMimeType);
+                  logger.info("telegram_voice_transcribed", {
+                    updateId: update.updateId,
+                    userId: update.userId,
+                    chatId: update.chatId,
+                    transcriptionLength: promptText.length,
+                    transcriptionPreview: previewText(promptText),
+                  });
+                }
+
+                if (attachmentContext) {
+                  const basePrompt = promptText ?? "Analizza gli allegati salvati e proponi i prossimi passi.";
+                  promptText = [attachmentContext, "", "User message:", basePrompt].join("\n");
+                }
+
+                if (!promptText) {
+                  return update.attachments.length > 0
+                    ? "Non riesco a processare l'allegato inviato."
+                    : "Posso gestire solo messaggi testuali o vocali.";
+                }
+
+                const modelReply = await agent.handleMessage(update.userId, promptText, String(update.updateId), signal);
+                lastPromptByUser.set(update.userId, promptText);
+                return modelReply;
+              },
+            }),
+        });
+        if (result.ok) {
+          handledMessages += 1;
+        } else {
+          failedMessages += 1;
         }
+        reply = result.reply;
 
         await dispatchAssistantReply({
           telegram,
