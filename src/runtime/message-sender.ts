@@ -22,23 +22,11 @@ export async function sendTelegramTextReply(params: {
   extraLogFields?: Record<string, unknown>;
   onSentText?: (text: string) => Promise<void> | void;
 }): Promise<void> {
-  const outbound = params.text.slice(0, TELEGRAM_MESSAGE_LIMIT);
-  const htmlOutbound = formatTelegramHtml(outbound);
-  const plainOutbound = stripMarkdown(outbound);
-  let sentText = htmlOutbound;
-  let formatMode: "html" | "plain_fallback" = "html";
-
-  try {
-    await params.telegram.sendMessage(params.update.chatId, htmlOutbound, { parseMode: "HTML" });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    if (!message.includes("Telegram sendMessage failed: 400")) {
-      throw error;
-    }
-    sentText = plainOutbound;
-    formatMode = "plain_fallback";
-    await params.telegram.sendMessage(params.update.chatId, plainOutbound);
-  }
+  const { sentText, formatMode } = await sendTelegramFormattedMessage({
+    telegram: params.telegram,
+    chatId: params.update.chatId,
+    text: params.text,
+  });
 
   await params.onSentText?.(sentText);
   params.logger.info("telegram_message_sent", {
@@ -53,4 +41,26 @@ export async function sendTelegramTextReply(params: {
     formatMode,
     ...(params.extraLogFields ?? {}),
   });
+}
+
+export async function sendTelegramFormattedMessage(params: {
+  telegram: TelegramAdapter;
+  chatId: number;
+  text: string;
+}): Promise<{ sentText: string; formatMode: "html" | "plain_fallback" }> {
+  const outbound = params.text.slice(0, TELEGRAM_MESSAGE_LIMIT);
+  const htmlOutbound = formatTelegramHtml(outbound);
+  const plainOutbound = stripMarkdown(outbound);
+
+  try {
+    await params.telegram.sendMessage(params.chatId, htmlOutbound, { parseMode: "HTML" });
+    return { sentText: htmlOutbound, formatMode: "html" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!message.includes("Telegram sendMessage failed: 400")) {
+      throw error;
+    }
+    await params.telegram.sendMessage(params.chatId, plainOutbound);
+    return { sentText: plainOutbound, formatMode: "plain_fallback" };
+  }
 }

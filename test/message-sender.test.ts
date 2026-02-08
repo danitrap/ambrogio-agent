@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { sendTelegramTextReply } from "../src/runtime/message-sender";
+import { sendTelegramFormattedMessage, sendTelegramTextReply } from "../src/runtime/message-sender";
 
 class FakeTelegram {
   public calls: Array<{ chatId: number; text: string; parseMode?: "HTML" }> = [];
   public failFirstSend = false;
+  public failFirstError: Error | null = null;
   private sendCount = 0;
 
   async sendMessage(chatId: number, text: string, options?: { parseMode?: "HTML" }): Promise<void> {
     this.sendCount += 1;
     this.calls.push({ chatId, text, parseMode: options?.parseMode });
+    if (this.failFirstError && this.sendCount === 1) {
+      throw this.failFirstError;
+    }
     if (this.failFirstSend && this.sendCount === 1) {
       throw new Error("Telegram sendMessage failed: 400");
     }
@@ -88,5 +92,50 @@ describe("sendTelegramTextReply", () => {
     expect(telegram.calls).toHaveLength(2);
     expect(telegram.calls[0]).toEqual({ chatId: 3, text: "<b>ciao</b> &lt;tag&gt;", parseMode: "HTML" });
     expect(telegram.calls[1]).toEqual({ chatId: 3, text: "ciao <tag>", parseMode: undefined });
+  });
+});
+
+describe("sendTelegramFormattedMessage", () => {
+  test("sends html-formatted text and reports html mode", async () => {
+    const telegram = new FakeTelegram();
+
+    const result = await sendTelegramFormattedMessage({
+      telegram: telegram as never,
+      chatId: 3,
+      text: "**ciao**",
+    });
+
+    expect(telegram.calls).toEqual([{ chatId: 3, text: "<b>ciao</b>", parseMode: "HTML" }]);
+    expect(result).toEqual({ sentText: "<b>ciao</b>", formatMode: "html" });
+  });
+
+  test("falls back to plain text on telegram 400 parse errors", async () => {
+    const telegram = new FakeTelegram();
+    telegram.failFirstSend = true;
+
+    const result = await sendTelegramFormattedMessage({
+      telegram: telegram as never,
+      chatId: 3,
+      text: "**ciao** <tag>",
+    });
+
+    expect(telegram.calls).toHaveLength(2);
+    expect(telegram.calls[0]).toEqual({ chatId: 3, text: "<b>ciao</b> &lt;tag&gt;", parseMode: "HTML" });
+    expect(telegram.calls[1]).toEqual({ chatId: 3, text: "ciao <tag>", parseMode: undefined });
+    expect(result).toEqual({ sentText: "ciao <tag>", formatMode: "plain_fallback" });
+  });
+
+  test("rethrows non-400 telegram errors", async () => {
+    const telegram = new FakeTelegram();
+    telegram.failFirstError = new Error("Telegram sendMessage failed: 500");
+
+    await expect(
+      sendTelegramFormattedMessage({
+        telegram: telegram as never,
+        chatId: 3,
+        text: "ciao",
+      }),
+    ).rejects.toThrow("Telegram sendMessage failed: 500");
+    expect(telegram.calls).toHaveLength(1);
   });
 });

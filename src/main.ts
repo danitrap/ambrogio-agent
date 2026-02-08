@@ -13,7 +13,7 @@ import { handleTelegramCommand } from "./runtime/command-handlers";
 import { createHeartbeatRunner } from "./runtime/heartbeat-runner";
 import { parseQuietHours } from "./runtime/heartbeat-quiet-hours";
 import { HEARTBEAT_FILE_NAME, HEARTBEAT_INTERVAL_MS } from "./runtime/heartbeat";
-import { sendTelegramTextReply } from "./runtime/message-sender";
+import { sendTelegramFormattedMessage, sendTelegramTextReply } from "./runtime/message-sender";
 import { dispatchAssistantReply, resolveAudioPathForUpload } from "./runtime/reply-dispatcher";
 import { StateStore } from "./runtime/state-store";
 import { startTelegramUpdateLoop } from "./runtime/telegram-update-loop";
@@ -433,7 +433,13 @@ async function main(): Promise<void> {
     runHeartbeatPromptWithTimeout,
     buildHeartbeatRuntimeStatus,
     getAlertChatId: () => lastAuthorizedChatId,
-    sendAlertMessage: (chatId, message) => telegram.sendMessage(chatId, message),
+    sendAlertMessage: async (chatId, message) => {
+      await sendTelegramFormattedMessage({
+        telegram,
+        chatId,
+        text: message,
+      });
+    },
     recordRecentTelegramEntry,
     previewText,
     dedupWindowMs: HEARTBEAT_ALERT_DEDUP_WINDOW_MS,
