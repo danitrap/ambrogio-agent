@@ -12,6 +12,8 @@ Generate natural speech from text - supports 74+ languages, multiple models for 
 
 ## Response Mode Contract (Ambrogio)
 
+Reference: il contratto runtime ufficiale per invio audio/file e definito nel system prompt del bridge modello.
+
 When you want the runtime to send your answer as Telegram audio, prepend exactly:
 
 ```text

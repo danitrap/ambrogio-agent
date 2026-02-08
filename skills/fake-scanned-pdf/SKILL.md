@@ -26,6 +26,7 @@ bash /data/.codex/skills/fake-scanned-pdf/scripts/fakescanner.sh "<input.pdf>"
 
 - After execution, verify that the output file exists.
 - Report the final output path and file size.
+- Reference: il contratto runtime ufficiale per invio file su Telegram e definito nel system prompt del bridge modello.
 - When conversion succeeds, include this tag in the final answer so runtime auto-sends the PDF on Telegram:
 
 ```text
