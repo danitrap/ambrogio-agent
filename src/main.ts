@@ -521,12 +521,10 @@ async function main(): Promise<void> {
     const controller = new AbortController();
     const result = await withTimeout(
       (async () => {
-        const discovered = await skills.discover();
-        const hydrated = await Promise.all(discovered.map((skill) => skills.hydrate(skill)));
         return modelBridge.respond({
           requestId,
           message: prompt,
-          skills: hydrated,
+          skills: [],
           signal: controller.signal,
         });
       })(),
@@ -540,6 +538,19 @@ async function main(): Promise<void> {
 
   const buildHeartbeatRuntimeStatus = (): string => {
     const nowMs = Date.now();
+    const localNow = new Date(nowMs);
+    const localTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown";
+    const localDateTime = new Intl.DateTimeFormat("it-IT", {
+      timeZone: localTimezone,
+      weekday: "long",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(localNow);
     const summary = modelBridge.getLastExecutionSummary();
     const idle = lastTelegramMessageAtMs === null ? "n/a" : formatDuration(nowMs - lastTelegramMessageAtMs);
     const lastTelegramAt = lastTelegramMessageAtMs === null ? "n/a" : new Date(lastTelegramMessageAtMs).toISOString();
@@ -549,10 +560,15 @@ async function main(): Promise<void> {
     const recentMessages = recentTelegramMessages.length === 0
       ? ["none"]
       : recentTelegramMessages.slice(-5).map((entry, index) => `${index + 1}. ${entry}`);
+    const todoPath = path.join(config.dataRoot, "TODO.md");
 
     return [
       "Runtime status:",
       `Now: ${new Date(nowMs).toISOString()}`,
+      `Local timezone: ${localTimezone}`,
+      `Local date/time: ${localDateTime}`,
+      `Data root: ${config.dataRoot}`,
+      `TODO path: ${todoPath}`,
       `Uptime: ${formatDuration(nowMs - startedAtMs)}`,
       `Handled messages: ${handledMessages}`,
       `Failed messages: ${failedMessages}`,
@@ -564,6 +580,7 @@ async function main(): Promise<void> {
       `Last telegram message summary: ${lastTelegramMessageSummary}`,
       "Recent telegram messages (last 5):",
       ...recentMessages,
+      "TODO review guidance: read TODO path directly before deciding follow-up.",
       `Last codex exec: ${codexSummary}`,
     ].join("\n");
   };
@@ -581,11 +598,12 @@ async function main(): Promise<void> {
     heartbeatLastRunAt = new Date().toISOString();
     const requestId = `heartbeat-${Date.now()}`;
     try {
+      const runtimeStatus = buildHeartbeatRuntimeStatus();
       const cycleResult = await runHeartbeatCycle({
         logger,
         readHeartbeatDoc,
         runHeartbeatPrompt: async ({ prompt, requestId: cycleRequestId }) =>
-          runHeartbeatPromptWithTimeout(`${prompt}\n\n${buildHeartbeatRuntimeStatus()}`, cycleRequestId),
+          runHeartbeatPromptWithTimeout(`${prompt}\n\n${runtimeStatus}`, cycleRequestId),
         getAlertChatId: () => lastAuthorizedChatId,
         sendAlert: async (chatId, message) => {
           await telegram.sendMessage(chatId, message);

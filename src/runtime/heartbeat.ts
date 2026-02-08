@@ -16,6 +16,7 @@ export function buildHeartbeatPrompt(heartbeatDoc: string | null): string {
   const base = [
     "Run a lightweight periodic heartbeat check.",
     "Follow HEARTBEAT.md instructions if provided below.",
+    "Use Runtime status details (including TODO path and data root) to inspect current state before deciding.",
     "Do not resurrect stale tasks unless HEARTBEAT.md explicitly asks for it.",
     `If there is nothing actionable, reply with exactly ${HEARTBEAT_OK}.`,
   ].join("\n");

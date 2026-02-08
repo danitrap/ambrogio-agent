@@ -2,7 +2,6 @@ import type { TelegramAllowlist } from "../auth/allowlist";
 import type { Logger } from "../logging/audit";
 import type { ModelBridge } from "../model/types";
 import type { SkillDiscovery } from "../skills/discovery";
-import { selectSkills } from "../skills/resolver";
 
 export type AgentDependencies = {
   allowlist: TelegramAllowlist;
@@ -22,17 +21,13 @@ export class AgentService {
       return "Unauthorized user.";
     }
 
-    const availableSkills = await this.deps.skills.discover();
-    const selected = selectSkills(text, availableSkills);
-    const hydrated = await Promise.all(selected.map((skill) => this.deps.skills.hydrate(skill)));
-
     const history = this.historyByUser.get(userId) ?? [];
     const contextualMessage = formatContextualMessage(history, text);
 
     const modelResponse = await this.deps.modelBridge.respond({
       requestId,
       message: contextualMessage,
-      skills: hydrated,
+      skills: [],
       signal,
     });
     const responseText = modelResponse.text || "Done.";
