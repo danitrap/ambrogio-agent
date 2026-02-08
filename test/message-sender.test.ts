@@ -48,4 +48,22 @@ describe("sendTelegramTextReply", () => {
 
     expect(telegram.calls[0]?.text.length).toBe(4000);
   });
+
+  test("calls onSentText callback with outbound text", async () => {
+    const telegram = new FakeTelegram();
+    const logger = new FakeLogger();
+    const sent: string[] = [];
+
+    await sendTelegramTextReply({
+      telegram: telegram as never,
+      logger: logger as never,
+      update: { updateId: 1, userId: 2, chatId: 3 },
+      text: "ciao callback",
+      onSentText: (text) => {
+        sent.push(text);
+      },
+    });
+
+    expect(sent).toEqual(["ciao callback"]);
+  });
 });

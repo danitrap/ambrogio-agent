@@ -11,6 +11,12 @@ import { OpenAiTranscriber } from "./model/openai-transcriber";
 import { runAgentRequestWithTimeout } from "./runtime/agent-request";
 import { handleTelegramCommand } from "./runtime/command-handlers";
 import { HEARTBEAT_FILE_NAME, HEARTBEAT_INTERVAL_MS, runHeartbeatCycle } from "./runtime/heartbeat";
+import {
+  clearRecentTelegramMessages,
+  MAX_RECENT_TELEGRAM_MESSAGES,
+  loadRecentTelegramMessages,
+  saveRecentTelegramMessages,
+} from "./runtime/recent-telegram-history";
 import { sendTelegramTextReply } from "./runtime/message-sender";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
@@ -307,6 +313,7 @@ async function dispatchAssistantReply(params: {
   noTtsPrefix?: string;
   forceAudio?: boolean;
   logContext?: { command?: string };
+  onTextSent?: (text: string) => Promise<void>;
 }): Promise<void> {
   const parsed = parseTelegramResponse(params.rawReply);
   const warnings = await sendTaggedDocuments(
@@ -325,6 +332,7 @@ async function dispatchAssistantReply(params: {
     try {
       const audioBlob = await params.tts.synthesize(outbound);
       await params.telegram.sendAudio(params.update.chatId, audioBlob, `reply-${params.update.updateId}.mp3`);
+      await params.onTextSent?.(`audio reply: ${previewText(outbound, 120)}`);
       params.logger.info("telegram_audio_reply_sent", {
         updateId: params.update.updateId,
         userId: params.update.userId,
@@ -352,6 +360,7 @@ async function dispatchAssistantReply(params: {
         text: outbound,
         command: params.logContext?.command,
         extraLogFields: { mode: "text_fallback" },
+        onSentText: params.onTextSent,
       });
       return;
     }
@@ -366,6 +375,7 @@ async function dispatchAssistantReply(params: {
       text: fallback,
       command: params.logContext?.command,
       extraLogFields: { mode: "text_fallback_no_tts" },
+      onSentText: params.onTextSent,
     });
     return;
   }
@@ -377,6 +387,7 @@ async function dispatchAssistantReply(params: {
     text: outbound,
     command: params.logContext?.command,
     extraLogFields: { mode: parsed.mode },
+    onSentText: params.onTextSent,
   });
 }
 
@@ -444,6 +455,26 @@ async function main(): Promise<void> {
   let handledMessages = 0;
   let failedMessages = 0;
   let lastAuthorizedChatId: number | null = null;
+  let lastTelegramMessageAtMs: number | null = null;
+  let lastTelegramMessageSummary = "n/a";
+  const recentTelegramMessages = await loadRecentTelegramMessages(config.dataRoot);
+  if (recentTelegramMessages.length > 0) {
+    const lastEntry = recentTelegramMessages[recentTelegramMessages.length - 1];
+    if (lastEntry) {
+      const separator = " - ";
+      const separatorIndex = lastEntry.indexOf(separator);
+      if (separatorIndex > 0) {
+        const timestamp = lastEntry.slice(0, separatorIndex);
+        const parsed = Date.parse(timestamp);
+        if (Number.isFinite(parsed)) {
+          lastTelegramMessageAtMs = parsed;
+        }
+        lastTelegramMessageSummary = lastEntry.slice(separatorIndex + separator.length) || "n/a";
+      } else {
+        lastTelegramMessageSummary = lastEntry;
+      }
+    }
+  }
   const lastPromptByUser = new Map<number, string>();
   let heartbeatInFlight = false;
   let heartbeatLastRunAt: string | null = null;
@@ -461,6 +492,29 @@ async function main(): Promise<void> {
       logger.warn("heartbeat_doc_read_failed", { heartbeatPath, message });
       return null;
     }
+  };
+
+  const pushRecentTelegramMessage = (summary: string): void => {
+    recentTelegramMessages.push(summary);
+    const maxEntries = MAX_RECENT_TELEGRAM_MESSAGES;
+    if (recentTelegramMessages.length > maxEntries) {
+      recentTelegramMessages.splice(0, recentTelegramMessages.length - maxEntries);
+    }
+  };
+
+  const persistRecentTelegramHistory = async (): Promise<void> => {
+    try {
+      await saveRecentTelegramMessages(config.dataRoot, recentTelegramMessages);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn("telegram_history_persist_failed", { message });
+    }
+  };
+
+  const recordRecentTelegramEntry = async (role: "user" | "assistant", summary: string, atMs?: number): Promise<void> => {
+    const timestamp = new Date(atMs ?? Date.now()).toISOString();
+    pushRecentTelegramMessage(`${timestamp} - ${role}: ${summary}`);
+    await persistRecentTelegramHistory();
   };
 
   const runHeartbeatPromptWithTimeout = async (prompt: string, requestId: string): Promise<string> => {
@@ -484,6 +538,36 @@ async function main(): Promise<void> {
     return result.text ?? "";
   };
 
+  const buildHeartbeatRuntimeStatus = (): string => {
+    const nowMs = Date.now();
+    const summary = modelBridge.getLastExecutionSummary();
+    const idle = lastTelegramMessageAtMs === null ? "n/a" : formatDuration(nowMs - lastTelegramMessageAtMs);
+    const lastTelegramAt = lastTelegramMessageAtMs === null ? "n/a" : new Date(lastTelegramMessageAtMs).toISOString();
+    const codexSummary = summary
+      ? `${summary.status} (${summary.startedAt}${typeof summary.durationMs === "number" ? `, ${formatDuration(summary.durationMs)}` : ""})`
+      : "n/a";
+    const recentMessages = recentTelegramMessages.length === 0
+      ? ["none"]
+      : recentTelegramMessages.slice(-5).map((entry, index) => `${index + 1}. ${entry}`);
+
+    return [
+      "Runtime status:",
+      `Now: ${new Date(nowMs).toISOString()}`,
+      `Uptime: ${formatDuration(nowMs - startedAtMs)}`,
+      `Handled messages: ${handledMessages}`,
+      `Failed messages: ${failedMessages}`,
+      `Heartbeat in flight: ${heartbeatInFlight ? "yes" : "no"}`,
+      `Heartbeat last run: ${heartbeatLastRunAt ?? "n/a"}`,
+      `Heartbeat last result: ${heartbeatLastResult}`,
+      `Last telegram message at: ${lastTelegramAt}`,
+      `Idle since last telegram message: ${idle}`,
+      `Last telegram message summary: ${lastTelegramMessageSummary}`,
+      "Recent telegram messages (last 5):",
+      ...recentMessages,
+      `Last codex exec: ${codexSummary}`,
+    ].join("\n");
+  };
+
   const runScheduledHeartbeat = async (
     trigger: "timer" | "manual",
   ): Promise<{ status: "ok" | "ok_notice_sent" | "alert_sent" | "alert_dropped" | "skipped_inflight"; requestId?: string }> => {
@@ -501,10 +585,11 @@ async function main(): Promise<void> {
         logger,
         readHeartbeatDoc,
         runHeartbeatPrompt: async ({ prompt, requestId: cycleRequestId }) =>
-          runHeartbeatPromptWithTimeout(prompt, cycleRequestId),
+          runHeartbeatPromptWithTimeout(`${prompt}\n\n${buildHeartbeatRuntimeStatus()}`, cycleRequestId),
         getAlertChatId: () => lastAuthorizedChatId,
         sendAlert: async (chatId, message) => {
           await telegram.sendMessage(chatId, message);
+          await recordRecentTelegramEntry("assistant", `heartbeat alert: ${previewText(message, 120)}`);
         },
         requestId,
       });
@@ -532,6 +617,18 @@ async function main(): Promise<void> {
         if (allowlist.isAllowed(update.userId)) {
           lastAuthorizedChatId = update.chatId;
         }
+        lastTelegramMessageAtMs = Date.now();
+        if (update.text) {
+          lastTelegramMessageSummary = `text: ${previewText(update.text, 120)}`;
+        } else if (update.voiceFileId) {
+          lastTelegramMessageSummary = "voice message";
+        } else if (update.attachments.length > 0) {
+          const kinds = [...new Set(update.attachments.map((attachment) => attachment.kind))];
+          lastTelegramMessageSummary = `attachments: ${kinds.join(",")} (${update.attachments.length})`;
+        } else {
+          lastTelegramMessageSummary = "non-text message";
+        }
+        await recordRecentTelegramEntry("user", lastTelegramMessageSummary, lastTelegramMessageAtMs);
         logger.info("telegram_message_received", {
           updateId: update.updateId,
           userId: update.userId,
@@ -550,6 +647,9 @@ async function main(): Promise<void> {
             update,
             text: outbound,
             command: command?.name,
+            onSentText: async (text) => {
+              await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+            },
           });
         };
         const executePrompt = async (prompt: string, commandName: string) => {
@@ -583,6 +683,8 @@ async function main(): Promise<void> {
           sendCommandReply,
           getStatusReply: () => {
             const uptime = formatDuration(Date.now() - startedAtMs);
+            const idle = lastTelegramMessageAtMs === null ? "n/a" : formatDuration(Date.now() - lastTelegramMessageAtMs);
+            const lastTelegramAt = lastTelegramMessageAtMs === null ? "n/a" : new Date(lastTelegramMessageAtMs).toISOString();
             const summary = modelBridge.getLastExecutionSummary();
             const lines = [
               "Agent status:",
@@ -595,7 +697,9 @@ async function main(): Promise<void> {
               `Heartbeat running: ${heartbeatInFlight ? "yes" : "no"}`,
               `Heartbeat last run: ${heartbeatLastRunAt ?? "n/a"}`,
               `Heartbeat last result: ${heartbeatLastResult}`,
-              `Heartbeat target chat: ${lastAuthorizedChatId ?? "n/a"}`,
+              `Last telegram message at: ${lastTelegramAt}`,
+              `Idle since last telegram message: ${idle}`,
+              `Last telegram message summary: ${lastTelegramMessageSummary}`,
             ];
             return lines.join("\n");
           },
@@ -637,6 +741,22 @@ async function main(): Promise<void> {
               chatId: update.chatId,
             });
           },
+          clearRuntimeState: async () => {
+            recentTelegramMessages.splice(0, recentTelegramMessages.length);
+            lastTelegramMessageAtMs = null;
+            lastTelegramMessageSummary = "n/a";
+            try {
+              await clearRecentTelegramMessages(config.dataRoot);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              logger.warn("telegram_history_clear_failed", { message });
+            }
+            logger.info("runtime_state_cleared", {
+              updateId: update.updateId,
+              userId: update.userId,
+              chatId: update.chatId,
+            });
+          },
           executePrompt,
           dispatchAssistantReply: async (reply, options) => {
             await dispatchAssistantReply({
@@ -649,6 +769,9 @@ async function main(): Promise<void> {
               noTtsPrefix: options.noTtsPrefix,
               forceAudio: options.forceAudio,
               logContext: { command: options.command },
+              onTextSent: async (text) => {
+                await recordRecentTelegramEntry("assistant", text);
+              },
             });
           },
           sendAudioFile: async (inputPath: string) => {
@@ -693,6 +816,9 @@ async function main(): Promise<void> {
             logger,
             update,
             text: "Unauthorized user.",
+            onSentText: async (text) => {
+              await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+            },
           });
           continue;
         }
@@ -791,6 +917,9 @@ async function main(): Promise<void> {
           rootRealPath: dataRootRealPath,
           update,
           rawReply: reply,
+          onTextSent: async (text) => {
+            await recordRecentTelegramEntry("assistant", text);
+          },
         });
       }
     } catch (error) {

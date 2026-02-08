@@ -19,6 +19,7 @@ export async function handleTelegramCommand(params: {
   getLastPrompt: (userId: number) => string | undefined;
   setLastPrompt: (userId: number, prompt: string) => void;
   clearConversation: (userId: number) => void;
+  clearRuntimeState: () => Promise<void>;
   executePrompt: (prompt: string, command: string) => Promise<AgentRequestResult>;
   dispatchAssistantReply: (reply: string, options: { command: string; forceAudio?: boolean; noTtsPrefix?: string }) => Promise<void>;
   sendAudioFile: (inputPath: string) => Promise<string>;
@@ -111,6 +112,7 @@ export async function handleTelegramCommand(params: {
       return true;
     case "clear":
       params.clearConversation(params.update.userId);
+      await params.clearRuntimeState();
       await params.sendCommandReply("Memoria conversazione cancellata.");
       return true;
     default:

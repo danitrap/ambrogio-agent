@@ -18,6 +18,7 @@ describe("handleTelegramCommand", () => {
       getLastPrompt: () => undefined,
       setLastPrompt: () => undefined,
       clearConversation: () => undefined,
+      clearRuntimeState: async () => undefined,
       executePrompt: async () => ({ reply: "", ok: true }),
       dispatchAssistantReply: async () => undefined,
       sendAudioFile: async () => "",
@@ -41,6 +42,7 @@ describe("handleTelegramCommand", () => {
       getLastPrompt: () => undefined,
       setLastPrompt: () => undefined,
       clearConversation: () => undefined,
+      clearRuntimeState: async () => undefined,
       executePrompt: async () => ({ reply: "", ok: true }),
       dispatchAssistantReply: async () => undefined,
       sendAudioFile: async () => "",
@@ -67,6 +69,7 @@ describe("handleTelegramCommand", () => {
       getLastPrompt: () => undefined,
       setLastPrompt: () => undefined,
       clearConversation: () => undefined,
+      clearRuntimeState: async () => undefined,
       executePrompt: async () => ({ reply: "", ok: true }),
       dispatchAssistantReply: async () => undefined,
       sendAudioFile: async () => "",
@@ -97,6 +100,7 @@ describe("handleTelegramCommand", () => {
       getLastPrompt: () => undefined,
       setLastPrompt: () => undefined,
       clearConversation: () => undefined,
+      clearRuntimeState: async () => undefined,
       executePrompt: async () => ({ reply: "", ok: true }),
       dispatchAssistantReply: async () => undefined,
       sendAudioFile: async () => "",
@@ -105,5 +109,41 @@ describe("handleTelegramCommand", () => {
 
     expect(handled).toBe(true);
     expect(replies).toEqual(["Heartbeat completato: HEARTBEAT_OK (nessun alert)."]);
+  });
+
+  test("clear command resets both conversation and runtime state", async () => {
+    const replies: string[] = [];
+    let conversationCleared = false;
+    let runtimeCleared = false;
+
+    const handled = await handleTelegramCommand({
+      command: { name: "clear", args: "" },
+      update: { updateId: 1, userId: 1, chatId: 1 },
+      isAllowed: () => true,
+      sendCommandReply: async (text) => {
+        replies.push(text);
+      },
+      getStatusReply: () => "",
+      getLastLogReply: () => "",
+      getMemoryReply: () => "",
+      getSkillsReply: async () => "",
+      getLastPrompt: () => undefined,
+      setLastPrompt: () => undefined,
+      clearConversation: () => {
+        conversationCleared = true;
+      },
+      clearRuntimeState: async () => {
+        runtimeCleared = true;
+      },
+      executePrompt: async () => ({ reply: "", ok: true }),
+      dispatchAssistantReply: async () => undefined,
+      sendAudioFile: async () => "",
+      runHeartbeatNow: async () => null,
+    });
+
+    expect(handled).toBe(true);
+    expect(conversationCleared).toBe(true);
+    expect(runtimeCleared).toBe(true);
+    expect(replies).toEqual(["Memoria conversazione cancellata."]);
   });
 });

@@ -18,9 +18,11 @@ export async function sendTelegramTextReply(params: {
   text: string;
   command?: string;
   extraLogFields?: Record<string, unknown>;
+  onSentText?: (text: string) => Promise<void> | void;
 }): Promise<void> {
   const outbound = params.text.slice(0, TELEGRAM_MESSAGE_LIMIT);
   await params.telegram.sendMessage(params.update.chatId, outbound);
+  await params.onSentText?.(outbound);
   params.logger.info("telegram_message_sent", {
     updateId: params.update.updateId,
     userId: params.update.userId,
