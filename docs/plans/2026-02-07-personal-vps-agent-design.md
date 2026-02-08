@@ -4,7 +4,7 @@ Date: 2026-02-07
 
 ## Goals
 
-Build a personal assistant ambrogio-agent that runs in Docker on a Hetzner VPS, receives input from Telegram, and can read/write files in a mounted host directory. The system should be secure by design, single-user only, and extensible with Agent Skills-style capabilities.
+Build a personal assistant ambrogio-agent that runs in Docker on a VPS, receives input from Telegram, and can read/write files in a mounted host directory. The system should be secure by design, single-user only, and extensible with Agent Skills-style capabilities.
 
 ## Confirmed Decisions
 
