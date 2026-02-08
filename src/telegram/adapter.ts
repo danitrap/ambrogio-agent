@@ -174,7 +174,7 @@ export class TelegramAdapter {
     };
   }
 
-  async sendMessage(chatId: number, text: string): Promise<void> {
+  async sendMessage(chatId: number, text: string, options: { parseMode?: "HTML" } = {}): Promise<void> {
     const response = await fetch(`${this.baseUrl}/sendMessage`, {
       method: "POST",
       headers: {
@@ -183,6 +183,7 @@ export class TelegramAdapter {
       body: JSON.stringify({
         chat_id: chatId,
         text,
+        parse_mode: options.parseMode,
       }),
     });
 

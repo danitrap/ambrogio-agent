@@ -150,6 +150,26 @@ describe("TelegramAdapter", () => {
     expect(calls[0]?.body).toContain('"action":"typing"');
   });
 
+  test("sends message with HTML parse mode", async () => {
+    const calls: Array<{ url: string; body: string }> = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        body: String(init?.body ?? ""),
+      });
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter("token");
+    await adapter.sendMessage(456, "<b>ciao</b>", { parseMode: "HTML" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toContain("/sendMessage");
+    expect(calls[0]?.body).toContain('"chat_id":456');
+    expect(calls[0]?.body).toContain('"text":"<b>ciao</b>"');
+    expect(calls[0]?.body).toContain('"parse_mode":"HTML"');
+  });
+
   test("throws when typing chat action request fails", async () => {
     globalThis.fetch = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
     const adapter = new TelegramAdapter("token");

@@ -2,10 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { sendTelegramTextReply } from "../src/runtime/message-sender";
 
 class FakeTelegram {
-  public calls: Array<{ chatId: number; text: string }> = [];
+  public calls: Array<{ chatId: number; text: string; parseMode?: "HTML" }> = [];
+  public failFirstSend = false;
+  private sendCount = 0;
 
-  async sendMessage(chatId: number, text: string): Promise<void> {
-    this.calls.push({ chatId, text });
+  async sendMessage(chatId: number, text: string, options?: { parseMode?: "HTML" }): Promise<void> {
+    this.sendCount += 1;
+    this.calls.push({ chatId, text, parseMode: options?.parseMode });
+    if (this.failFirstSend && this.sendCount === 1) {
+      throw new Error("Telegram sendMessage failed: 400");
+    }
   }
 }
 
@@ -30,7 +36,7 @@ describe("sendTelegramTextReply", () => {
       command: "help",
     });
 
-    expect(telegram.calls).toEqual([{ chatId: 3, text: "ciao" }]);
+    expect(telegram.calls).toEqual([{ chatId: 3, text: "ciao", parseMode: "HTML" }]);
     expect(logger.infos[0]?.message).toBe("telegram_message_sent");
     expect(logger.infos[0]?.fields.command).toBe("help");
   });
@@ -65,5 +71,22 @@ describe("sendTelegramTextReply", () => {
     });
 
     expect(sent).toEqual(["ciao callback"]);
+  });
+
+  test("falls back to plain text when html send fails", async () => {
+    const telegram = new FakeTelegram();
+    telegram.failFirstSend = true;
+    const logger = new FakeLogger();
+
+    await sendTelegramTextReply({
+      telegram: telegram as never,
+      logger: logger as never,
+      update: { updateId: 1, userId: 2, chatId: 3 },
+      text: "**ciao** <tag>",
+    });
+
+    expect(telegram.calls).toHaveLength(2);
+    expect(telegram.calls[0]).toEqual({ chatId: 3, text: "<b>ciao</b> &lt;tag&gt;", parseMode: "HTML" });
+    expect(telegram.calls[1]).toEqual({ chatId: 3, text: "ciao <tag>", parseMode: undefined });
   });
 });
