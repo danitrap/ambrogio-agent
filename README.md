@@ -1,6 +1,6 @@
-# Personal VPS Agent (Telegram + Skills)
+# Personal VPS ambrogio-agent (Telegram + Skills)
 
-Personal-only agent wrapper for Telegram with a secure `/data` boundary and Agent Skills-style skill loading.
+Personal-only ambrogio-agent wrapper for Telegram with a secure `/data` boundary and Agent Skills-style skill loading.
 
 ## Features (v1)
 
@@ -61,7 +61,7 @@ When running in Docker, use device auth to avoid localhost callback issues:
 
 ```bash
 docker exec -it ambrogio-agent sh -lc 'HOME=/data CODEX_HOME=/data/.codex codex login --device-auth'
-docker compose restart agent
+docker compose restart ambrogio-agent
 ```
 
 Auth data is persisted in the mounted `./data/.codex` directory.
@@ -70,7 +70,7 @@ All writable state is under `./data` on the host, mounted to `/data` in the cont
 
 ## Heartbeat MVP
 
-The agent runs a dedicated heartbeat every 30 minutes (fixed interval, no configuration flags).
+The ambrogio-agent runs a dedicated heartbeat every 30 minutes (fixed interval, no configuration flags).
 
 - Reads optional `/data/HEARTBEAT.md` instructions.
 - Runs a lightweight model check with a runtime status block.
@@ -104,7 +104,7 @@ Use natural language for task operations:
 - "Cancella il task precedente"
 - "Tra 5 minuti mandami i top post di Hacker News"
 
-When runtime tasks and TODO intents are ambiguous, the agent asks explicit confirmation before executing.
+When runtime tasks and TODO intents are ambiguous, the ambrogio-agent asks explicit confirmation before executing.
 
 Legacy commands (`/tasks`, `/task <id>`, `/retrytask <id>`, `/canceltask <id>`) remain available for debugging.
 
@@ -176,5 +176,5 @@ Install from host into the mounted skills directory:
 python3 /Users/daniele/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo elevenlabs/skills \
   --path text-to-speech \
-  --dest /Users/daniele/Code/agent/data/.codex/skills
+  --dest /Users/daniele/Code/ambrogio-agent/data/.codex/skills
 ```

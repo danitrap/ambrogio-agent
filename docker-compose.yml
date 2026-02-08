@@ -1,5 +1,5 @@
 services:
-  agent:
+  ambrogio-agent:
     build:
       context: .
       cache_from:

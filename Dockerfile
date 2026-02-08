@@ -35,8 +35,8 @@ RUN bun install --frozen-lockfile
 COPY src ./src
 COPY skills ./skills
 
-RUN groupadd --system agent && useradd --system --gid agent --create-home agent
-USER agent
+RUN groupadd --system ambrogio-agent && useradd --system --gid ambrogio-agent --create-home ambrogio-agent
+USER ambrogio-agent
 
 ENV NODE_ENV=production
 CMD ["bun", "run", "src/main.ts"]

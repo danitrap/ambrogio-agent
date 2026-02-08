@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelBridge } from "../src/model/types";
-import { AgentService } from "../src/app/agent-service";
+import { AmbrogioAgentService } from "../src/app/ambrogio-agent-service";
 import { TelegramAllowlist } from "../src/auth/allowlist";
 import { Logger } from "../src/logging/audit";
 
-describe("AgentService", () => {
+describe("AmbrogioAgentService", () => {
   test("denies unauthorized users", async () => {
     const model: ModelBridge = {
       respond: async () => ({ text: "ok" }),
     };
 
-    const service = new AgentService({
+    const service = new AmbrogioAgentService({
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
 
@@ -30,7 +30,7 @@ describe("AgentService", () => {
       },
     };
 
-    const service = new AgentService({
+    const service = new AmbrogioAgentService({
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
 
@@ -58,7 +58,7 @@ describe("AgentService", () => {
       },
     };
 
-    const service = new AgentService({
+    const service = new AmbrogioAgentService({
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
 
@@ -79,7 +79,7 @@ describe("AgentService", () => {
       respond: async () => ({ text: "ok" }),
     };
 
-    const service = new AgentService({
+    const service = new AmbrogioAgentService({
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
 

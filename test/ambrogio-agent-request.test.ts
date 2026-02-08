@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runAgentRequestWithTimeout } from "../src/runtime/agent-request";
+import { runAmbrogioAgentRequestWithTimeout } from "../src/runtime/ambrogio-agent-request";
 
 class FakeLogger {
   public errors: Array<{ message: string; fields: Record<string, unknown> }> = [];
@@ -9,10 +9,10 @@ class FakeLogger {
   }
 }
 
-describe("runAgentRequestWithTimeout", () => {
+describe("runAmbrogioAgentRequestWithTimeout", () => {
   test("returns successful reply", async () => {
     const logger = new FakeLogger();
-    const result = await runAgentRequestWithTimeout({
+    const result = await runAmbrogioAgentRequestWithTimeout({
       logger: logger as never,
       update: { updateId: 1, userId: 7, chatId: 10 },
       timeoutMs: 1000,
@@ -25,7 +25,7 @@ describe("runAgentRequestWithTimeout", () => {
 
   test("maps timeout to fallback reply and logs timeout", async () => {
     const logger = new FakeLogger();
-    const result = await runAgentRequestWithTimeout({
+    const result = await runAmbrogioAgentRequestWithTimeout({
       logger: logger as never,
       update: { updateId: 2, userId: 8, chatId: 11 },
       timeoutMs: 1000,
@@ -46,7 +46,7 @@ describe("runAgentRequestWithTimeout", () => {
 
   test("maps generic errors to Error reply and logs failure", async () => {
     const logger = new FakeLogger();
-    const result = await runAgentRequestWithTimeout({
+    const result = await runAmbrogioAgentRequestWithTimeout({
       logger: logger as never,
       update: { updateId: 3, userId: 9, chatId: 12 },
       timeoutMs: 1000,

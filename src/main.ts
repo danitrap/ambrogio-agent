@@ -2,7 +2,7 @@ import { mkdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { AttachmentService, type ProcessedAttachment } from "./attachments/attachment-service";
 import { TelegramAllowlist } from "./auth/allowlist";
-import { AgentService } from "./app/agent-service";
+import { AmbrogioAgentService } from "./app/ambrogio-agent-service";
 import { loadConfig } from "./config/env";
 import { Logger } from "./logging/audit";
 import { correlationFields } from "./logging/correlation";
@@ -254,14 +254,14 @@ async function main(): Promise<void> {
   const stateStore = await StateStore.open(config.dataRoot);
   logger.info("state_store_opened", { dbPath: path.join(config.dataRoot, "runtime", "state.db") });
 
-  const agent = new AgentService({
+  const ambrogioAgent = new AmbrogioAgentService({
     allowlist,
     modelBridge,
     logger,
     conversationStore: stateStore,
   });
 
-  logger.info("agent_started", {
+  logger.info("ambrogio_agent_started", {
     dataRoot: config.dataRoot,
     codexCommand: config.codexCommand,
   });
@@ -406,7 +406,7 @@ async function main(): Promise<void> {
     }
     const prompt = task.payloadPrompt ?? task.requestPreview;
     try {
-      const reply = await agent.handleMessage(task.userId, prompt, `delayed-${task.taskId}`);
+      const reply = await ambrogioAgent.handleMessage(task.userId, prompt, `delayed-${task.taskId}`);
       const marked = stateStore.markBackgroundTaskCompleted(task.taskId, reply);
       if (!marked) {
         logger.info("scheduled_task_result_dropped", { taskId: task.taskId, reason: "status_changed" });
@@ -776,7 +776,7 @@ async function main(): Promise<void> {
           const result = await runOperationWithSoftTimeout({
             commandName,
             requestPreview: prompt,
-            operation: (signal) => agent.handleMessage(update.userId, prompt, String(update.updateId), signal),
+            operation: (signal) => ambrogioAgent.handleMessage(update.userId, prompt, String(update.updateId), signal),
           });
           if (result.ok) {
             handledMessages += 1;
@@ -797,7 +797,7 @@ async function main(): Promise<void> {
             const lastTelegramAt = lastTelegramMessageAtMs === null ? "n/a" : new Date(lastTelegramMessageAtMs).toISOString();
             const summary = modelBridge.getLastExecutionSummary();
             const lines = [
-              "Agent status:",
+              "Ambrogio-agent status:",
               `Uptime: ${uptime}`,
               `Handled messages: ${handledMessages}`,
               `Failed messages: ${failedMessages}`,
@@ -819,7 +819,7 @@ async function main(): Promise<void> {
           },
           getLastLogReply: () => buildLastLogMessage(modelBridge.getLastExecutionSummary()),
           getMemoryReply: (userId) => {
-            const stats = agent.getConversationStats(userId);
+            const stats = ambrogioAgent.getConversationStats(userId);
             const lines = [
               "Conversation memory:",
               `Entries: ${stats.entries}`,
@@ -849,7 +849,7 @@ async function main(): Promise<void> {
             lastPromptByUser.set(userId, prompt);
           },
           clearConversation: (userId) => {
-            agent.clearConversation(userId);
+            ambrogioAgent.clearConversation(userId);
             logger.info("conversation_cleared", {
               updateId: update.updateId,
               userId,
@@ -1029,7 +1029,7 @@ async function main(): Promise<void> {
                 : "Posso gestire solo messaggi testuali o vocali.";
             }
 
-            const modelReply = await agent.handleMessage(update.userId, promptText, String(update.updateId), signal);
+            const modelReply = await ambrogioAgent.handleMessage(update.userId, promptText, String(update.updateId), signal);
             lastPromptByUser.set(update.userId, promptText);
             return modelReply;
           },

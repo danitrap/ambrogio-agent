@@ -2,15 +2,15 @@
 
 ## Project Structure & Module Organization
 Core application code lives in `src/`, grouped by responsibility:
-- `src/app/` service orchestration (`AgentService`)
+- `src/app/` service orchestration (`AmbrogioAgentService`)
 - `src/auth/`, `src/skills/`, `src/model/`, `src/telegram/`, `src/logging/`
 - `src/main.ts` process entrypoint
 
-Tests live in `test/` as Bun test files (for example, `test/agent-service.test.ts`). Runtime data is mounted under `data/`. Skills are discovered from both `data/skills/` and `data/.codex/skills/` (via `CODEX_HOME`). Design notes and planning docs are in `docs/plans/`.
+Tests live in `test/` as Bun test files (for example, `test/ambrogio-agent-service.test.ts`). Runtime data is mounted under `data/`. Skills are discovered from both `data/skills/` and `data/.codex/skills/` (via `CODEX_HOME`). Design notes and planning docs are in `docs/plans/`.
 
 ## Build, Test, and Development Commands
 - `bun install`: install dependencies.
-- `bun run dev`: run the agent locally from `src/main.ts`.
+- `bun run dev`: run the ambrogio-agent locally from `src/main.ts`.
 - `bun run start`: production-style local start.
 - `bun test`: run unit/integration tests in `test/`.
 - `bun run typecheck`: run strict TypeScript checks without emit.
@@ -22,7 +22,7 @@ After code or configuration changes, rebuild and restart containers with `docker
 Use TypeScript ES modules with strict compiler settings (`tsconfig.json`).
 - Indentation: 2 spaces.
 - Strings: double quotes.
-- Naming: `PascalCase` for classes/types, `camelCase` for functions/variables, `kebab-case` for file names (for example, `agent-service.ts`).
+- Naming: `PascalCase` for classes/types, `camelCase` for functions/variables, `kebab-case` for file names (for example, `ambrogio-agent-service.ts`).
 - Keep modules focused by domain folder; avoid cross-cutting utility dumps.
 
 ## Testing Guidelines

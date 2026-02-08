@@ -1,10 +1,10 @@
-# Personal VPS Agent Design (Telegram + Codex ACP + Agent Skills)
+# Personal VPS Ambrogio-agent Design (Telegram + Codex ACP + Agent Skills)
 
 Date: 2026-02-07
 
 ## Goals
 
-Build a personal assistant agent that runs in Docker on a Hetzner VPS, receives input from Telegram, and can read/write files in a mounted host directory. The system should be secure by design, single-user only, and extensible with Agent Skills-style capabilities.
+Build a personal assistant ambrogio-agent that runs in Docker on a Hetzner VPS, receives input from Telegram, and can read/write files in a mounted host directory. The system should be secure by design, single-user only, and extensible with Agent Skills-style capabilities.
 
 ## Confirmed Decisions
 
@@ -138,7 +138,7 @@ Required environment variables (initial):
 - `LOG_LEVEL=info`
 
 Mounted volumes:
-- `/host/path/agent-data:/data:rw`
+- `/host/path/ambrogio-agent-data:/data:rw`
 
 Future v2:
 - Add `exec_utility` tool with explicit utility allowlist and argument schema validation.

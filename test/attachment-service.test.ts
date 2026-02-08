@@ -6,7 +6,7 @@ import { AttachmentService } from "../src/attachments/attachment-service";
 
 describe("AttachmentService", () => {
   test("stores document attachments and extracts inline text under max size", async () => {
-    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "agent-attachments-"));
+    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ambrogio-agent-attachments-"));
     const service = new AttachmentService(dataRoot, 64 * 1024);
     const content = "ciao dal file";
 
@@ -37,7 +37,7 @@ describe("AttachmentService", () => {
   });
 
   test("does not extract inline text when document exceeds max bytes", async () => {
-    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "agent-attachments-"));
+    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ambrogio-agent-attachments-"));
     const service = new AttachmentService(dataRoot, 64 * 1024);
     const content = "a".repeat(64 * 1024 + 1);
 
@@ -63,7 +63,7 @@ describe("AttachmentService", () => {
   });
 
   test("stores photo attachments without inline text", async () => {
-    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "agent-attachments-"));
+    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ambrogio-agent-attachments-"));
     const service = new AttachmentService(dataRoot, 64 * 1024);
 
     const processed = await service.processIncoming({
@@ -90,7 +90,7 @@ describe("AttachmentService", () => {
   });
 
   test("sanitizes unsafe names when storing attachments", async () => {
-    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "agent-attachments-"));
+    const dataRoot = await mkdtemp(path.join(os.tmpdir(), "ambrogio-agent-attachments-"));
     const service = new AttachmentService(dataRoot, 64 * 1024);
 
     const processed = await service.processIncoming({

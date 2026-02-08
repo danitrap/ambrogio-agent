@@ -7,18 +7,18 @@ export type RequestContext = {
   chatId: number;
 };
 
-export type AgentRequestResult = {
+export type AmbrogioAgentRequestResult = {
   reply: string;
   ok: boolean;
 };
 
-export async function runAgentRequestWithTimeout(params: {
+export async function runAmbrogioAgentRequestWithTimeout(params: {
   logger: Logger;
   update: RequestContext;
   timeoutMs: number;
   operation: () => Promise<string>;
   command?: string;
-}): Promise<AgentRequestResult> {
+}): Promise<AmbrogioAgentRequestResult> {
   try {
     const reply = await params.operation();
     return { reply, ok: true };

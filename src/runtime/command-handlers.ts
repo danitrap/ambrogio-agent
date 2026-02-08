@@ -1,5 +1,5 @@
 import type { TelegramCommand } from "../telegram/commands";
-import type { AgentRequestResult } from "./agent-request";
+import type { AmbrogioAgentRequestResult } from "./ambrogio-agent-request";
 
 type UpdateContext = {
   updateId: number;
@@ -20,7 +20,7 @@ export async function handleTelegramCommand(params: {
   setLastPrompt: (userId: number, prompt: string) => void;
   clearConversation: (userId: number) => void;
   clearRuntimeState: () => Promise<void>;
-  executePrompt: (prompt: string, command: string) => Promise<AgentRequestResult>;
+  executePrompt: (prompt: string, command: string) => Promise<AmbrogioAgentRequestResult>;
   dispatchAssistantReply: (reply: string, options: { command: string; forceAudio?: boolean; noTtsPrefix?: string }) => Promise<void>;
   sendAudioFile: (inputPath: string) => Promise<string>;
   runHeartbeatNow: () => Promise<string | null>;
@@ -42,7 +42,7 @@ export async function handleTelegramCommand(params: {
         [
           "Comandi disponibili:",
           "/help - mostra questo aiuto",
-          "/status - stato runtime agente",
+          "/status - stato runtime ambrogio-agent",
           "/lastlog - ultimo riepilogo codex exec",
           "/retry - riesegue l'ultimo prompt utente",
           "/audio <prompt> - esegue il prompt e risponde in audio",

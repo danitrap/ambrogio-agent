@@ -9,17 +9,17 @@ type ConversationStore = {
   getConversationStats: (userId: number) => { entries: number; userTurns: number; assistantTurns: number; hasContext: boolean };
 };
 
-export type AgentDependencies = {
+export type AmbrogioAgentDependencies = {
   allowlist: TelegramAllowlist;
   modelBridge: ModelBridge;
   logger: Logger;
   conversationStore?: ConversationStore;
 };
 
-export class AgentService {
+export class AmbrogioAgentService {
   private readonly historyByUser = new Map<number, Array<{ role: "user" | "assistant"; text: string }>>();
 
-  constructor(private readonly deps: AgentDependencies) {}
+  constructor(private readonly deps: AmbrogioAgentDependencies) {}
 
   async handleMessage(userId: number, text: string, requestId?: string, signal?: AbortSignal): Promise<string> {
     if (!this.deps.allowlist.isAllowed(userId)) {

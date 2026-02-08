@@ -1,5 +1,5 @@
 {
-  "name": "agent",
+  "name": "ambrogio-agent",
   "type": "module",
   "private": true,
   "scripts": {
