@@ -21,7 +21,7 @@ describe("bootstrapProjectSkills", () => {
     expect(copied).toContain("Alpha body");
   });
 
-  test("skips skill when destination already has that id", async () => {
+  test("updates skill when destination content drifts from source", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "skills-bootstrap-"));
     const sourceRoot = path.join(tempRoot, "project-skills");
     const destinationRoot = path.join(tempRoot, "data-skills");
@@ -35,8 +35,27 @@ describe("bootstrapProjectSkills", () => {
     const result = await bootstrapProjectSkills({ sourceRoot, destinationRoot });
 
     expect(result.copied).toEqual([]);
+    expect(result.updated).toEqual(["alpha"]);
+    expect(result.skipped).toEqual([]);
+    const synced = await readFile(path.join(destinationRoot, "alpha", "SKILL.md"), "utf8");
+    expect(synced).toBe("source\n");
+  });
+
+  test("keeps existing skill untouched when source and destination are equal", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "skills-bootstrap-"));
+    const sourceRoot = path.join(tempRoot, "project-skills");
+    const destinationRoot = path.join(tempRoot, "data-skills");
+
+    await mkdir(path.join(sourceRoot, "alpha"), { recursive: true });
+    await writeFile(path.join(sourceRoot, "alpha", "SKILL.md"), "same\n");
+
+    await mkdir(path.join(destinationRoot, "alpha"), { recursive: true });
+    await writeFile(path.join(destinationRoot, "alpha", "SKILL.md"), "same\n");
+
+    const result = await bootstrapProjectSkills({ sourceRoot, destinationRoot });
+
+    expect(result.copied).toEqual([]);
+    expect(result.updated).toEqual([]);
     expect(result.skipped).toEqual(["alpha"]);
-    const retained = await readFile(path.join(destinationRoot, "alpha", "SKILL.md"), "utf8");
-    expect(retained).toBe("destination\n");
   });
 });

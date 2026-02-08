@@ -210,13 +210,15 @@ async function main(): Promise<void> {
     sourceRoot: projectSkillsRoot,
     destinationRoot: codexSkillsRoot,
   });
-  if (bootstrapResult.copied.length > 0 || bootstrapResult.skipped.length > 0) {
+  if (bootstrapResult.copied.length > 0 || bootstrapResult.updated.length > 0 || bootstrapResult.skipped.length > 0) {
     logger.info("skills_bootstrap_completed", {
       sourceRoot: projectSkillsRoot,
       destinationRoot: codexSkillsRoot,
       copiedCount: bootstrapResult.copied.length,
+      updatedCount: bootstrapResult.updated.length,
       skippedCount: bootstrapResult.skipped.length,
       copied: bootstrapResult.copied,
+      updated: bootstrapResult.updated,
       skipped: bootstrapResult.skipped,
     });
   }
