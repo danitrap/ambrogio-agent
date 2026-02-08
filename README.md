@@ -6,6 +6,7 @@ Personal-only agent wrapper for Telegram with a secure `/data` boundary and Agen
 
 - Telegram long polling input
 - Telegram vocal message support with transcription (`gpt-4o-mini-transcribe`)
+- Optional audio replies via ElevenLabs TTS when `ELEVENLABS_API_KEY` is set
 - Single-user allowlist (`TELEGRAM_ALLOWED_USER_ID`)
 - File tools scoped to `/data` only:
   - `list_files`
@@ -80,4 +81,15 @@ The service runs `codex exec` per request and passes the prompt via stdin.
 ```bash
 bun test
 bun run typecheck
+```
+
+## Install ElevenLabs Text-to-Speech Skill
+
+Install from host into the mounted skills directory:
+
+```bash
+python3 /Users/daniele/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo elevenlabs/skills \
+  --path text-to-speech \
+  --dest /Users/daniele/Code/agent/data/.codex/skills
 ```

@@ -20,6 +20,7 @@ export type AppConfig = {
   telegramBotToken: string;
   telegramAllowedUserId: number;
   openaiApiKey: string;
+  elevenLabsApiKey: string | null;
   dataRoot: string;
   acpCommand: string;
   acpArgs: string[];
@@ -38,6 +39,7 @@ export function loadConfig(): AppConfig {
     telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),
     telegramAllowedUserId: parseNumber(requireEnv("TELEGRAM_ALLOWED_USER_ID"), "TELEGRAM_ALLOWED_USER_ID"),
     openaiApiKey: requireEnv("OPENAI_API_KEY"),
+    elevenLabsApiKey: Bun.env.ELEVENLABS_API_KEY ?? null,
     dataRoot: Bun.env.DATA_ROOT ?? "/data",
     acpCommand: Bun.env.ACP_COMMAND ?? "codex-acp",
     acpArgs,

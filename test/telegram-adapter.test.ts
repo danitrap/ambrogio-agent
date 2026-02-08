@@ -98,4 +98,32 @@ describe("TelegramAdapter", () => {
     const adapter = new TelegramAdapter("token");
     await expect(adapter.sendTyping(1)).rejects.toThrow("Telegram sendChatAction failed: 500");
   });
+
+  test("sends audio with multipart form data", async () => {
+    let requestBody: unknown;
+    let requestUrl = "";
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      requestUrl = String(input);
+      requestBody = init?.body;
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const adapter = new TelegramAdapter("token");
+    await adapter.sendAudio(999, new Blob(["mp3"], { type: "audio/mpeg" }), "milano_oggi.mp3", "Meteo Milano");
+
+    expect(requestUrl).toContain("/sendAudio");
+    expect(requestBody instanceof FormData).toBe(true);
+    const form = requestBody as FormData;
+    expect(form.get("chat_id")).toBe("999");
+    expect(form.get("caption")).toBe("Meteo Milano");
+    const audio = form.get("audio");
+    expect(audio instanceof File).toBe(true);
+    expect((audio as File).name).toBe("milano_oggi.mp3");
+  });
+
+  test("throws when sending audio fails", async () => {
+    globalThis.fetch = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
+    const adapter = new TelegramAdapter("token");
+    await expect(adapter.sendAudio(1, new Blob(["a"]), "a.mp3")).rejects.toThrow("Telegram sendAudio failed: 500");
+  });
 });

@@ -1,9 +1,12 @@
 import { mkdir } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
+import path from "node:path";
 import { TelegramAllowlist } from "./auth/allowlist";
 import { AgentService } from "./app/agent-service";
 import { loadConfig } from "./config/env";
 import { Logger } from "./logging/audit";
 import { CodexAcpBridge } from "./model/codex-acp-bridge";
+import { ElevenLabsTts } from "./model/elevenlabs-tts";
 import { OpenAiTranscriber } from "./model/openai-transcriber";
 import { GitSnapshotManager } from "./snapshots/git";
 import { SkillDiscovery } from "./skills/discovery";
@@ -13,6 +16,7 @@ import { FsTools } from "./tools/fs-tools";
 
 const TYPING_INTERVAL_MS = 4_000;
 const MODEL_TIMEOUT_MS = 180_000;
+const MAX_TELEGRAM_AUDIO_BYTES = 49_000_000;
 
 function previewText(value: string, max = 160): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
@@ -81,6 +85,37 @@ function buildLastLogMessage(summary: ReturnType<CodexAcpBridge["getLastExecutio
   }
 
   return lines.join("\n");
+}
+
+function ensurePathWithinRoot(rootRealPath: string, targetRealPath: string): void {
+  const normalizedRoot = rootRealPath.endsWith(path.sep) ? rootRealPath : `${rootRealPath}${path.sep}`;
+  if (targetRealPath !== rootRealPath && !targetRealPath.startsWith(normalizedRoot)) {
+    throw new Error(`Path escapes root: ${targetRealPath}`);
+  }
+}
+
+async function resolveAudioPathForUpload(rootRealPath: string, inputPath: string): Promise<{ realPath: string; relativePath: string }> {
+  const trimmedPath = inputPath.trim();
+  if (!trimmedPath) {
+    throw new Error("Usage: /sendaudio <relative-path-under-data-root>");
+  }
+
+  const absolute = path.resolve(rootRealPath, trimmedPath);
+  const real = await realpath(absolute);
+  ensurePathWithinRoot(rootRealPath, real);
+
+  const fileStat = await stat(real);
+  if (!fileStat.isFile()) {
+    throw new Error("Target is not a file");
+  }
+  if (fileStat.size > MAX_TELEGRAM_AUDIO_BYTES) {
+    throw new Error(`File too large for Telegram audio upload (${fileStat.size} bytes)`);
+  }
+
+  return {
+    realPath: real,
+    relativePath: path.relative(rootRealPath, real),
+  };
 }
 
 function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
@@ -158,6 +193,7 @@ async function main(): Promise<void> {
   const allowlist = new TelegramAllowlist(config.telegramAllowedUserId);
   const fsTools = new FsTools({ root: config.dataRoot });
   await fsTools.init();
+  const dataRootRealPath = await realpath(config.dataRoot);
 
   const snapshots = new GitSnapshotManager(config.dataRoot);
   await snapshots.init();
@@ -175,6 +211,7 @@ async function main(): Promise<void> {
     },
   });
   const transcriber = new OpenAiTranscriber(config.openaiApiKey);
+  const tts = config.elevenLabsApiKey ? new ElevenLabsTts(config.elevenLabsApiKey) : null;
 
   const agent = new AgentService({
     allowlist,
@@ -240,6 +277,7 @@ async function main(): Promise<void> {
                   "/memory - stato memoria conversazione",
                   "/skills - lista skills disponibili",
                   "/clear - cancella memoria conversazione",
+                  "/sendaudio <path> - invia un file audio da /data",
                 ].join("\n"),
               );
               continue;
@@ -333,6 +371,30 @@ async function main(): Promise<void> {
               }
 
               await sendCommandReply(reply);
+              continue;
+            }
+            case "sendaudio": {
+              try {
+                const { realPath, relativePath } = await resolveAudioPathForUpload(dataRootRealPath, command.args);
+                const fileBlob = Bun.file(realPath);
+                await telegram.sendAudio(update.chatId, fileBlob, path.basename(relativePath), `File: ${relativePath}`);
+                logger.info("telegram_audio_sent", {
+                  updateId: update.updateId,
+                  userId: update.userId,
+                  chatId: update.chatId,
+                  filePath: relativePath,
+                });
+                await sendCommandReply(`Audio inviato: ${relativePath}`);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                logger.warn("telegram_audio_send_failed", {
+                  updateId: update.updateId,
+                  userId: update.userId,
+                  chatId: update.chatId,
+                  message,
+                });
+                await sendCommandReply(`Impossibile inviare audio: ${message}`);
+              }
               continue;
             }
             case "clear":
@@ -442,14 +504,44 @@ async function main(): Promise<void> {
         }
 
         const outbound = reply.slice(0, 4000);
-        await telegram.sendMessage(update.chatId, outbound);
-        logger.info("telegram_message_sent", {
-          updateId: update.updateId,
-          userId: update.userId,
-          chatId: update.chatId,
-          textLength: outbound.length,
-          textPreview: previewText(outbound),
-        });
+        if (tts) {
+          try {
+            const audioBlob = await tts.synthesize(outbound);
+            await telegram.sendAudio(update.chatId, audioBlob, `reply-${update.updateId}.mp3`);
+            logger.info("telegram_audio_reply_sent", {
+              updateId: update.updateId,
+              userId: update.userId,
+              chatId: update.chatId,
+              textLength: outbound.length,
+              textPreview: previewText(outbound),
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            logger.warn("telegram_audio_reply_failed", {
+              updateId: update.updateId,
+              userId: update.userId,
+              chatId: update.chatId,
+              message,
+            });
+            await telegram.sendMessage(update.chatId, outbound);
+            logger.info("telegram_message_sent", {
+              updateId: update.updateId,
+              userId: update.userId,
+              chatId: update.chatId,
+              textLength: outbound.length,
+              textPreview: previewText(outbound),
+            });
+          }
+        } else {
+          await telegram.sendMessage(update.chatId, outbound);
+          logger.info("telegram_message_sent", {
+            updateId: update.updateId,
+            userId: update.userId,
+            chatId: update.chatId,
+            textLength: outbound.length,
+            textPreview: previewText(outbound),
+          });
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
