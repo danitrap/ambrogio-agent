@@ -22,6 +22,7 @@ export async function handleTelegramCommand(params: {
   executePrompt: (prompt: string, command: string) => Promise<AgentRequestResult>;
   dispatchAssistantReply: (reply: string, options: { command: string; forceAudio?: boolean; noTtsPrefix?: string }) => Promise<void>;
   sendAudioFile: (inputPath: string) => Promise<string>;
+  runHeartbeatNow: () => Promise<string | null>;
 }): Promise<boolean> {
   const command = params.command;
   if (!command) {
@@ -46,6 +47,7 @@ export async function handleTelegramCommand(params: {
           "/memory - stato memoria conversazione",
           "/skills - lista skills disponibili",
           "/clear - cancella memoria conversazione",
+          "/heartbeat - forza un heartbeat immediato",
           "/sendaudio <path> - invia un file audio da /data",
         ].join("\n"),
       );
@@ -99,6 +101,14 @@ export async function handleTelegramCommand(params: {
       }
       return true;
     }
+    case "heartbeat":
+      {
+        const reply = await params.runHeartbeatNow();
+        if (reply) {
+          await params.sendCommandReply(reply);
+        }
+      }
+      return true;
     case "clear":
       params.clearConversation(params.update.userId);
       await params.sendCommandReply("Memoria conversazione cancellata.");

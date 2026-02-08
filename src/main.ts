@@ -1,5 +1,4 @@
-import { mkdir } from "node:fs/promises";
-import { realpath, rename, stat } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import { AttachmentService, type ProcessedAttachment } from "./attachments/attachment-service";
 import { TelegramAllowlist } from "./auth/allowlist";
@@ -11,6 +10,7 @@ import { ElevenLabsTts } from "./model/elevenlabs-tts";
 import { OpenAiTranscriber } from "./model/openai-transcriber";
 import { runAgentRequestWithTimeout } from "./runtime/agent-request";
 import { handleTelegramCommand } from "./runtime/command-handlers";
+import { HEARTBEAT_FILE_NAME, HEARTBEAT_INTERVAL_MS, runHeartbeatCycle } from "./runtime/heartbeat";
 import { sendTelegramTextReply } from "./runtime/message-sender";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
@@ -443,12 +443,95 @@ async function main(): Promise<void> {
   const startedAtMs = Date.now();
   let handledMessages = 0;
   let failedMessages = 0;
+  let lastAuthorizedChatId: number | null = null;
   const lastPromptByUser = new Map<number, string>();
+  let heartbeatInFlight = false;
+  let heartbeatLastRunAt: string | null = null;
+  let heartbeatLastResult: "never" | "ok" | "ok_notice_sent" | "alert_sent" | "alert_dropped" | "skipped_inflight" = "never";
+
+  const readHeartbeatDoc = async (): Promise<string | null> => {
+    const heartbeatPath = `${config.dataRoot}/${HEARTBEAT_FILE_NAME}`;
+    try {
+      return await readFile(heartbeatPath, "utf8");
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        return null;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn("heartbeat_doc_read_failed", { heartbeatPath, message });
+      return null;
+    }
+  };
+
+  const runHeartbeatPromptWithTimeout = async (prompt: string, requestId: string): Promise<string> => {
+    const controller = new AbortController();
+    const result = await withTimeout(
+      (async () => {
+        const discovered = await skills.discover();
+        const hydrated = await Promise.all(discovered.map((skill) => skills.hydrate(skill)));
+        return modelBridge.respond({
+          requestId,
+          message: prompt,
+          skills: hydrated,
+          signal: controller.signal,
+        });
+      })(),
+      MODEL_TIMEOUT_MS,
+      () => {
+        controller.abort();
+      },
+    );
+    return result.text ?? "";
+  };
+
+  const runScheduledHeartbeat = async (
+    trigger: "timer" | "manual",
+  ): Promise<{ status: "ok" | "ok_notice_sent" | "alert_sent" | "alert_dropped" | "skipped_inflight"; requestId?: string }> => {
+    if (heartbeatInFlight) {
+      logger.warn("heartbeat_skipped_inflight");
+      heartbeatLastResult = "skipped_inflight";
+      return { status: "skipped_inflight" };
+    }
+
+    heartbeatInFlight = true;
+    heartbeatLastRunAt = new Date().toISOString();
+    const requestId = `heartbeat-${Date.now()}`;
+    try {
+      const cycleResult = await runHeartbeatCycle({
+        logger,
+        readHeartbeatDoc,
+        runHeartbeatPrompt: async ({ prompt, requestId: cycleRequestId }) =>
+          runHeartbeatPromptWithTimeout(prompt, cycleRequestId),
+        getAlertChatId: () => lastAuthorizedChatId,
+        sendAlert: async (chatId, message) => {
+          await telegram.sendMessage(chatId, message);
+        },
+        requestId,
+      });
+      heartbeatLastResult = cycleResult.status;
+      logger.info("heartbeat_finished", { trigger, requestId, status: cycleResult.status });
+      return { status: cycleResult.status, requestId };
+    } finally {
+      heartbeatInFlight = false;
+    }
+  };
+
+  setInterval(() => {
+    void runScheduledHeartbeat("timer");
+  }, HEARTBEAT_INTERVAL_MS);
+  logger.info("heartbeat_loop_started", {
+    intervalMs: HEARTBEAT_INTERVAL_MS,
+    filePath: `${config.dataRoot}/${HEARTBEAT_FILE_NAME}`,
+  });
+
   while (true) {
     try {
       const updates = await telegram.getUpdates(offset, config.telegramPollTimeoutSeconds);
       for (const update of updates) {
         offset = Math.max(offset, update.updateId + 1);
+        if (allowlist.isAllowed(update.userId)) {
+          lastAuthorizedChatId = update.chatId;
+        }
         logger.info("telegram_message_received", {
           updateId: update.updateId,
           userId: update.userId,
@@ -508,6 +591,11 @@ async function main(): Promise<void> {
               `Failed messages: ${failedMessages}`,
               `Backend command: ${config.codexCommand}`,
               `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
+              `Heartbeat interval: ${Math.floor(HEARTBEAT_INTERVAL_MS / 60000)}m`,
+              `Heartbeat running: ${heartbeatInFlight ? "yes" : "no"}`,
+              `Heartbeat last run: ${heartbeatLastRunAt ?? "n/a"}`,
+              `Heartbeat last result: ${heartbeatLastResult}`,
+              `Heartbeat target chat: ${lastAuthorizedChatId ?? "n/a"}`,
             ];
             return lines.join("\n");
           },
@@ -574,6 +662,22 @@ async function main(): Promise<void> {
               filePath: relativePath,
             });
             return relativePath;
+          },
+          runHeartbeatNow: async () => {
+            const outcome = await runScheduledHeartbeat("manual");
+            if (outcome.status === "skipped_inflight") {
+              return "Heartbeat gia in esecuzione.";
+            }
+            if (outcome.status === "ok") {
+              return null;
+            }
+            if (outcome.status === "ok_notice_sent") {
+              return null;
+            }
+            if (outcome.status === "alert_sent") {
+              return "Heartbeat completato: alert inviato su Telegram.";
+            }
+            return "Heartbeat completato: alert necessario ma nessuna chat autorizzata disponibile.";
           },
         });
         if (commandHandled) {

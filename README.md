@@ -12,6 +12,7 @@ Personal-only agent wrapper for Telegram with a secure `/data` boundary and Agen
 - Bootstrap automatico delle skill versionate in `./skills` verso `/data/skills` (solo mancanti)
 - Docker hardening baseline (`read_only`, `cap_drop=ALL`, `no-new-privileges`)
 - Backend-tools-only mode via `codex exec` (no local fallback execution).
+- Minimal heartbeat loop every 30 minutes with silent `HEARTBEAT_OK` handling and alert-only Telegram delivery.
 
 ## Local run
 
@@ -61,6 +62,26 @@ docker compose restart agent
 Auth data is persisted in the mounted `./data/.codex` directory.
 
 All writable state is under `./data` on the host, mounted to `/data` in the container.
+
+## Heartbeat MVP
+
+The agent runs a dedicated heartbeat every 30 minutes (fixed interval, no configuration flags).
+
+- Reads optional `/data/HEARTBEAT.md` instructions.
+- Runs a lightweight model check.
+- If the model replies exactly `HEARTBEAT_OK`, nothing is sent.
+- If the reply is different, empty, or the heartbeat execution fails, it sends a Telegram alert.
+- Alerts are sent to the most recent authorized chat seen at runtime.
+
+Example `HEARTBEAT.md`:
+
+```md
+# Heartbeat
+
+- Check only for urgent actionable issues.
+- Do not continue stale tasks unless explicitly requested.
+- If no action is needed, reply exactly HEARTBEAT_OK.
+```
 
 ## Bootstrap skill locali (hosting migration-friendly)
 

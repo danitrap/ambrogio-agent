@@ -21,6 +21,7 @@ describe("handleTelegramCommand", () => {
       executePrompt: async () => ({ reply: "", ok: true }),
       dispatchAssistantReply: async () => undefined,
       sendAudioFile: async () => "",
+      runHeartbeatNow: async () => "",
     });
 
     expect(handled).toBe(true);
@@ -43,8 +44,66 @@ describe("handleTelegramCommand", () => {
       executePrompt: async () => ({ reply: "", ok: true }),
       dispatchAssistantReply: async () => undefined,
       sendAudioFile: async () => "",
+      runHeartbeatNow: async () => "",
     });
 
     expect(handled).toBe(false);
+  });
+
+  test("handles heartbeat command and returns forced execution result", async () => {
+    const replies: string[] = [];
+    let called = false;
+    const handled = await handleTelegramCommand({
+      command: { name: "heartbeat", args: "" },
+      update: { updateId: 1, userId: 1, chatId: 1 },
+      isAllowed: () => true,
+      sendCommandReply: async (text) => {
+        replies.push(text);
+      },
+      getStatusReply: () => "",
+      getLastLogReply: () => "",
+      getMemoryReply: () => "",
+      getSkillsReply: async () => "",
+      getLastPrompt: () => undefined,
+      setLastPrompt: () => undefined,
+      clearConversation: () => undefined,
+      executePrompt: async () => ({ reply: "", ok: true }),
+      dispatchAssistantReply: async () => undefined,
+      sendAudioFile: async () => "",
+      runHeartbeatNow: async () => {
+        called = true;
+        return "Heartbeat completato: ok";
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(called).toBe(true);
+    expect(replies).toEqual(["Heartbeat completato: ok"]);
+  });
+
+  test("heartbeat command stays silent when forced heartbeat is ok", async () => {
+    const replies: string[] = [];
+    const handled = await handleTelegramCommand({
+      command: { name: "heartbeat", args: "" },
+      update: { updateId: 1, userId: 1, chatId: 1 },
+      isAllowed: () => true,
+      sendCommandReply: async (text) => {
+        replies.push(text);
+      },
+      getStatusReply: () => "",
+      getLastLogReply: () => "",
+      getMemoryReply: () => "",
+      getSkillsReply: async () => "",
+      getLastPrompt: () => undefined,
+      setLastPrompt: () => undefined,
+      clearConversation: () => undefined,
+      executePrompt: async () => ({ reply: "", ok: true }),
+      dispatchAssistantReply: async () => undefined,
+      sendAudioFile: async () => "",
+      runHeartbeatNow: async () => null,
+    });
+
+    expect(handled).toBe(true);
+    expect(replies).toEqual([]);
   });
 });
