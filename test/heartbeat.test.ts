@@ -181,4 +181,85 @@ describe("heartbeat", () => {
 
     expect(result.status).toBe("alert_dropped");
   });
+
+  test("suppresses timer check-in during quiet hours", async () => {
+    let sent = false;
+    const result = await runHeartbeatCycle({
+      logger: new StubLogger(),
+      readHeartbeatDoc: async () => null,
+      runHeartbeatPrompt: async () =>
+        JSON.stringify({
+          action: "checkin",
+          issue: "Idle oltre soglia",
+          impact: "Rischio di perdere un follow-up",
+          nextStep: "Invia check-in breve",
+          todoItems: [],
+        }),
+      getAlertChatId: () => 999,
+      sendAlert: async () => {
+        sent = true;
+        return "sent";
+      },
+      requestId: "heartbeat-test",
+      trigger: "timer",
+      shouldSuppressCheckin: () => true,
+    });
+
+    expect(result.status).toBe("checkin_dropped");
+    expect(sent).toBe(false);
+  });
+
+  test("does not suppress timer alerts during quiet hours", async () => {
+    let sent = false;
+    const result = await runHeartbeatCycle({
+      logger: new StubLogger(),
+      readHeartbeatDoc: async () => null,
+      runHeartbeatPrompt: async () =>
+        JSON.stringify({
+          action: "alert",
+          issue: "Errore runtime",
+          impact: "Agente non operativo",
+          nextStep: "Intervento manuale",
+          todoItems: [],
+        }),
+      getAlertChatId: () => 999,
+      sendAlert: async () => {
+        sent = true;
+        return "sent";
+      },
+      requestId: "heartbeat-test",
+      trigger: "timer",
+      shouldSuppressCheckin: () => true,
+    });
+
+    expect(result.status).toBe("alert_sent");
+    expect(sent).toBe(true);
+  });
+
+  test("does not suppress manual check-in during quiet hours", async () => {
+    let sent = false;
+    const result = await runHeartbeatCycle({
+      logger: new StubLogger(),
+      readHeartbeatDoc: async () => null,
+      runHeartbeatPrompt: async () =>
+        JSON.stringify({
+          action: "checkin",
+          issue: "Idle oltre soglia",
+          impact: "Rischio di perdere un follow-up",
+          nextStep: "Invia check-in breve",
+          todoItems: [],
+        }),
+      getAlertChatId: () => 999,
+      sendAlert: async () => {
+        sent = true;
+        return "sent";
+      },
+      requestId: "heartbeat-test",
+      trigger: "manual",
+      shouldSuppressCheckin: () => true,
+    });
+
+    expect(result.status).toBe("checkin_sent");
+    expect(sent).toBe(true);
+  });
 });

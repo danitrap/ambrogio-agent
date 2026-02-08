@@ -38,6 +38,10 @@ describe("runAgentRequestWithTimeout", () => {
     expect(result.ok).toBe(false);
     expect(result.reply).toContain("Model backend unavailable right now");
     expect(logger.errors[0]?.message).toBe("request_timed_out");
+    expect(logger.errors[0]?.fields.updateId).toBe(2);
+    expect(logger.errors[0]?.fields.userId).toBe(8);
+    expect(logger.errors[0]?.fields.chatId).toBe(11);
+    expect(logger.errors[0]?.fields.command).toBe("retry");
   });
 
   test("maps generic errors to Error reply and logs failure", async () => {
@@ -53,5 +57,8 @@ describe("runAgentRequestWithTimeout", () => {
 
     expect(result).toEqual({ reply: "Error: boom", ok: false });
     expect(logger.errors[0]?.message).toBe("message_processing_failed");
+    expect(logger.errors[0]?.fields.updateId).toBe(3);
+    expect(logger.errors[0]?.fields.userId).toBe(9);
+    expect(logger.errors[0]?.fields.chatId).toBe(12);
   });
 });
