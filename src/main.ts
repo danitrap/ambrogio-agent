@@ -10,6 +10,7 @@ import { CodexAcpBridge } from "./model/codex-acp-bridge";
 import { ElevenLabsTts } from "./model/elevenlabs-tts";
 import { OpenAiTranscriber } from "./model/openai-transcriber";
 import { GitSnapshotManager } from "./snapshots/git";
+import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
 import { parseTelegramCommand } from "./telegram/commands";
@@ -201,8 +202,25 @@ async function main(): Promise<void> {
   const snapshots = new GitSnapshotManager(config.dataRoot);
   await snapshots.init();
 
+  const projectSkillsRoot = Bun.env.PROJECT_SKILLS_ROOT ?? path.resolve(import.meta.dir, "..", "skills");
+  const dataSkillsRoot = `${config.dataRoot}/skills`;
+  const bootstrapResult = await bootstrapProjectSkills({
+    sourceRoot: projectSkillsRoot,
+    destinationRoot: dataSkillsRoot,
+  });
+  if (bootstrapResult.copied.length > 0 || bootstrapResult.skipped.length > 0) {
+    logger.info("skills_bootstrap_completed", {
+      sourceRoot: projectSkillsRoot,
+      destinationRoot: dataSkillsRoot,
+      copiedCount: bootstrapResult.copied.length,
+      skippedCount: bootstrapResult.skipped.length,
+      copied: bootstrapResult.copied,
+      skipped: bootstrapResult.skipped,
+    });
+  }
+
   const skills = new SkillDiscovery([
-    `${config.dataRoot}/skills`,
+    dataSkillsRoot,
     `${codexHome}/skills`,
   ]);
   const modelBridge = new CodexAcpBridge(config.acpCommand, config.acpArgs, logger, {

@@ -27,6 +27,7 @@ services:
       - DATA_ROOT=/data
       - CODEX_HOME=/data/.codex
       - HOME=/data
+      - PROJECT_SKILLS_ROOT=/app/skills
       - NO_COLOR=1
       - LOG_LEVEL=info
       - TELEGRAM_POLL_TIMEOUT_SECONDS=20

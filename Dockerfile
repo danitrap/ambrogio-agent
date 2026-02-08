@@ -14,7 +14,7 @@ FROM oven/bun:1.3.6-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache git nodejs npm
+RUN apk add --no-cache bash git nodejs npm
 RUN npm install -g @openai/codex
 COPY --from=acp-builder /build/codex-acp/target/release/codex-acp /usr/local/bin/codex-acp
 
@@ -22,6 +22,7 @@ COPY package.json bun.lock tsconfig.json ./
 RUN bun install --frozen-lockfile
 
 COPY src ./src
+COPY skills ./skills
 
 RUN addgroup -S agent && adduser -S agent -G agent
 USER agent
