@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -11,6 +12,35 @@ export type SkillsBootstrapOptions = {
   sourceRoot: string;
   destinationRoot: string;
 };
+
+async function hashDirectory(root: string): Promise<string> {
+  const hash = createHash("sha256");
+
+  async function walk(dir: string): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const entry of entries) {
+      const absolute = path.join(dir, entry.name);
+      const relative = path.relative(root, absolute);
+      if (entry.isDirectory()) {
+        hash.update(`dir:${relative}\n`);
+        await walk(absolute);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const content = await readFile(absolute);
+      hash.update(`file:${relative}\n`);
+      hash.update(content);
+      hash.update("\n");
+    }
+  }
+
+  await walk(root);
+  return hash.digest("hex");
+}
 
 export async function bootstrapProjectSkills(options: SkillsBootstrapOptions): Promise<SkillsBootstrapResult> {
   const { sourceRoot, destinationRoot } = options;
@@ -67,16 +97,15 @@ export async function bootstrapProjectSkills(options: SkillsBootstrapOptions): P
       continue;
     }
 
-    const destinationSkillFile = path.join(destinationSkillPath, "SKILL.md");
-    let destinationContent = "";
+    let destinationHash = "";
     try {
-      destinationContent = await readFile(destinationSkillFile, "utf8");
+      destinationHash = await hashDirectory(destinationSkillPath);
     } catch {
-      destinationContent = "";
+      destinationHash = "";
     }
-    const sourceContent = await readFile(sourceSkillFile, "utf8");
+    const sourceHash = await hashDirectory(sourceSkillPath);
 
-    if (destinationContent === sourceContent) {
+    if (destinationHash === sourceHash) {
       skipped.push(entry.name);
       continue;
     }

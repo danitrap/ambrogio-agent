@@ -58,4 +58,26 @@ describe("bootstrapProjectSkills", () => {
     expect(result.updated).toEqual([]);
     expect(result.skipped).toEqual(["alpha"]);
   });
+
+  test("updates skill when nested script content drifts even if SKILL.md is equal", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "skills-bootstrap-"));
+    const sourceRoot = path.join(tempRoot, "project-skills");
+    const destinationRoot = path.join(tempRoot, "data-skills");
+
+    await mkdir(path.join(sourceRoot, "alpha", "scripts"), { recursive: true });
+    await writeFile(path.join(sourceRoot, "alpha", "SKILL.md"), "same\n");
+    await writeFile(path.join(sourceRoot, "alpha", "scripts", "run.sh"), "echo source\n");
+
+    await mkdir(path.join(destinationRoot, "alpha", "scripts"), { recursive: true });
+    await writeFile(path.join(destinationRoot, "alpha", "SKILL.md"), "same\n");
+    await writeFile(path.join(destinationRoot, "alpha", "scripts", "run.sh"), "echo destination\n");
+
+    const result = await bootstrapProjectSkills({ sourceRoot, destinationRoot });
+
+    expect(result.copied).toEqual([]);
+    expect(result.updated).toEqual(["alpha"]);
+    expect(result.skipped).toEqual([]);
+    const syncedScript = await readFile(path.join(destinationRoot, "alpha", "scripts", "run.sh"), "utf8");
+    expect(syncedScript).toBe("echo source\n");
+  });
 });

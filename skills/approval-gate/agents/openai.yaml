@@ -1,0 +1,4 @@
+interface:
+  display_name: "Approval Gate"
+  short_description: "Two-phase confirmation for sensitive actions"
+  default_prompt: "Use $approval-gate to require explicit user confirmation."

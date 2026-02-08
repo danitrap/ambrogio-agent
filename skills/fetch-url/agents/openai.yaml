@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fetch URL"
+  short_description: "Read-only single-page fetch with local artifacts"
+  default_prompt: "Use $fetch-url to download and summarize this page safely."

@@ -9,6 +9,11 @@ type BridgeOptions = {
   env?: Record<string, string>;
 };
 
+type CodexAuditAction = {
+  type: "shell_exec" | "web_search";
+  detail: string;
+};
+
 function previewLogText(value: string, max = 240): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
   if (normalized.length <= max) {
@@ -57,6 +62,54 @@ function unwrapFinalTags(text: string): string {
     return tagged[1].trim();
   }
   return trimmed.replaceAll(/<\/?final>/gi, "").trim();
+}
+
+function compactDetail(value: string, max = 220): string {
+  const normalized = value.replaceAll(/\s+/g, " ").trim();
+  if (normalized.length <= max) {
+    return normalized;
+  }
+  return `${normalized.slice(0, max)}...`;
+}
+
+export function extractCodexAuditActions(stderr: string): CodexAuditAction[] {
+  const actions: CodexAuditAction[] = [];
+  const seen = new Set<string>();
+
+  for (const match of stderr.matchAll(/🌐\s*Searched:\s*(.+)/g)) {
+    const query = compactDetail(match[1] ?? "");
+    if (!query) {
+      continue;
+    }
+    const key = `web_search:${query}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    actions.push({ type: "web_search", detail: query });
+  }
+
+  for (const line of stderr.split("\n")) {
+    const match = line.match(/^(.+)\s+in\s+(\S+)\s+(succeeded|exited|failed)\b.*$/);
+    if (!match) {
+      continue;
+    }
+    const command = (match[1] ?? "").trim();
+    const cwd = (match[2] ?? "").trim();
+    const status = (match[3] ?? "").trim();
+    if (!command || !cwd || !status) {
+      continue;
+    }
+    const detail = compactDetail(`${command} [cwd=${cwd}] [status=${status}]`);
+    const key = `shell_exec:${detail}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    actions.push({ type: "shell_exec", detail });
+  }
+
+  return actions;
 }
 
 export class ExecBridge implements ModelBridge {
@@ -173,6 +226,16 @@ export class ExecBridge implements ModelBridge {
         stdoutLength: stdout.length,
         stderrLength: stderr.length,
       });
+      const auditActions = extractCodexAuditActions(stderr);
+      if (auditActions.length > 0) {
+        this.logger.info("codex_exec_audit", {
+          ...correlationFields({ requestId }),
+          command: execCommand,
+          exitCode,
+          auditActionCount: auditActions.length,
+          auditActions: auditActions.slice(0, 20),
+        });
+      }
 
       let text = "";
       try {

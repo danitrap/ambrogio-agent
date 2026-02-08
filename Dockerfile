@@ -1,10 +1,33 @@
 # syntax=docker/dockerfile:1.7
-FROM oven/bun:1.3.6-alpine
+FROM oven/bun:1.3.6
 
 WORKDIR /app
 
-RUN apk add --no-cache bash ffmpeg ghostscript imagemagick git nodejs npm tzdata
-RUN npm install -g @openai/codex
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash \
+    curl \
+    ffmpeg \
+    ghostscript \
+    imagemagick \
+    git \
+    libatk1.0-0t64 \
+    libatspi2.0-0t64 \
+    libnspr4 \
+    libnss3 \
+    libxcomposite1 \
+    libxdamage1 \
+    nodejs \
+    npm \
+    tzdata \
+  && rm -rf /var/lib/apt/lists/*
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN mkdir -p /ms-playwright && chmod 755 /ms-playwright
+RUN npm install -g @openai/codex agent-browser \
+  && ln -sf /usr/local/lib/node_modules/agent-browser/bin/agent-browser.js /usr/local/bin/agent-browser \
+  && chmod +x /usr/local/lib/node_modules/agent-browser/bin/agent-browser.js \
+  && agent-browser --version
+RUN agent-browser install
 
 COPY package.json bun.lock tsconfig.json ./
 RUN bun install --frozen-lockfile
@@ -12,7 +35,7 @@ RUN bun install --frozen-lockfile
 COPY src ./src
 COPY skills ./skills
 
-RUN addgroup -S agent && adduser -S agent -G agent
+RUN groupadd --system agent && useradd --system --gid agent --create-home agent
 USER agent
 
 ENV NODE_ENV=production
