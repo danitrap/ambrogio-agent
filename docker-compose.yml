@@ -8,6 +8,11 @@ services:
         - type=local,dest=.docker-cache,mode=max
     container_name: ambrogio-agent
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     read_only: true
     tmpfs:
       - /tmp

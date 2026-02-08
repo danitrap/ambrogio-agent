@@ -11,7 +11,7 @@ import { parseTelegramCommand } from "./telegram/commands";
 import { FsTools } from "./tools/fs-tools";
 
 const TYPING_INTERVAL_MS = 4_000;
-const MODEL_TIMEOUT_MS = 60_000;
+const MODEL_TIMEOUT_MS = 180_000;
 
 function previewText(value: string, max = 160): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
