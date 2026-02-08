@@ -1,25 +1,28 @@
 import { describe, expect, test } from "bun:test";
-import { parseResponseMode } from "../src/telegram/response-mode";
+import { parseTelegramResponse } from "../src/telegram/response-mode";
 
-describe("parseResponseMode", () => {
+describe("parseTelegramResponse", () => {
   test("defaults to text mode when tag is missing", () => {
-    expect(parseResponseMode("Ciao")).toEqual({
+    expect(parseTelegramResponse("Ciao")).toEqual({
       mode: "text",
       text: "Ciao",
+      documentPaths: [],
     });
   });
 
   test("parses audio mode tag and strips it from output", () => {
-    expect(parseResponseMode("<response_mode>audio</response_mode>\nCiao Signor Daniele")).toEqual({
+    expect(parseTelegramResponse("<response_mode>audio</response_mode>\nCiao Signor Daniele")).toEqual({
       mode: "audio",
       text: "Ciao Signor Daniele",
+      documentPaths: [],
     });
   });
 
   test("parses text mode tag and strips it from output", () => {
-    expect(parseResponseMode("<response_mode>text</response_mode>\nCiao")).toEqual({
+    expect(parseTelegramResponse("<response_mode>text</response_mode>\nCiao")).toEqual({
       mode: "text",
       text: "Ciao",
+      documentPaths: [],
     });
   });
 });

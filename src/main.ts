@@ -100,10 +100,16 @@ function ensurePathWithinRoot(rootRealPath: string, targetRealPath: string): voi
   }
 }
 
-async function resolveAudioPathForUpload(rootRealPath: string, inputPath: string): Promise<{ realPath: string; relativePath: string }> {
+type ResolvedUploadPath = { realPath: string; relativePath: string };
+
+async function resolveFilePathForUpload(
+  rootRealPath: string,
+  inputPath: string,
+  opts: { emptyPathError: string; maxBytes: number; tooLargeErrorPrefix: string },
+): Promise<ResolvedUploadPath> {
   const trimmedPath = inputPath.trim();
   if (!trimmedPath) {
-    throw new Error("Usage: /sendaudio <relative-path-under-data-root>");
+    throw new Error(opts.emptyPathError);
   }
 
   const absolute = path.resolve(rootRealPath, trimmedPath);
@@ -114,8 +120,8 @@ async function resolveAudioPathForUpload(rootRealPath: string, inputPath: string
   if (!fileStat.isFile()) {
     throw new Error("Target is not a file");
   }
-  if (fileStat.size > MAX_TELEGRAM_AUDIO_BYTES) {
-    throw new Error(`File too large for Telegram audio upload (${fileStat.size} bytes)`);
+  if (fileStat.size > opts.maxBytes) {
+    throw new Error(`${opts.tooLargeErrorPrefix} (${fileStat.size} bytes)`);
   }
 
   return {
@@ -124,78 +130,82 @@ async function resolveAudioPathForUpload(rootRealPath: string, inputPath: string
   };
 }
 
-async function resolveDocumentPathForUpload(rootRealPath: string, inputPath: string): Promise<{ realPath: string; relativePath: string }> {
-  const trimmedPath = inputPath.trim();
-  if (!trimmedPath) {
-    throw new Error("Document path is empty");
+async function resolveAudioPathForUpload(rootRealPath: string, inputPath: string): Promise<ResolvedUploadPath> {
+  return resolveFilePathForUpload(rootRealPath, inputPath, {
+    emptyPathError: "Usage: /sendaudio <relative-path-under-data-root>",
+    maxBytes: MAX_TELEGRAM_AUDIO_BYTES,
+    tooLargeErrorPrefix: "File too large for Telegram audio upload",
+  });
+}
+
+async function resolveDocumentPathForUpload(rootRealPath: string, inputPath: string): Promise<ResolvedUploadPath> {
+  return resolveFilePathForUpload(rootRealPath, inputPath, {
+    emptyPathError: "Document path is empty",
+    maxBytes: MAX_TELEGRAM_DOCUMENT_BYTES,
+    tooLargeErrorPrefix: "File too large for Telegram document upload",
+  });
+}
+
+async function relocateGeneratedDocumentIfNeeded(rootRealPath: string, resolvedPath: ResolvedUploadPath): Promise<ResolvedUploadPath> {
+  if (!resolvedPath.relativePath.startsWith("attachments/") || !path.basename(resolvedPath.relativePath).includes("scannerizzato")) {
+    return resolvedPath;
   }
 
-  const absolute = path.resolve(rootRealPath, trimmedPath);
-  const real = await realpath(absolute);
-  ensurePathWithinRoot(rootRealPath, real);
-
-  const fileStat = await stat(real);
-  if (!fileStat.isFile()) {
-    throw new Error("Target is not a file");
-  }
-  if (fileStat.size > MAX_TELEGRAM_DOCUMENT_BYTES) {
-    throw new Error(`File too large for Telegram document upload (${fileStat.size} bytes)`);
-  }
-
+  const now = new Date();
+  const dateFolder = path.join(
+    String(now.getUTCFullYear()),
+    String(now.getUTCMonth() + 1).padStart(2, "0"),
+    String(now.getUTCDate()).padStart(2, "0"),
+  );
+  const generatedFolder = path.join(rootRealPath, GENERATED_SCANNED_PDFS_RELATIVE_DIR, dateFolder);
+  await mkdir(generatedFolder, { recursive: true });
+  const targetPath = path.join(generatedFolder, path.basename(resolvedPath.relativePath));
+  await rename(resolvedPath.realPath, targetPath);
+  const realPath = await realpath(targetPath);
   return {
-    realPath: real,
-    relativePath: path.relative(rootRealPath, real),
+    realPath,
+    relativePath: path.relative(rootRealPath, realPath),
   };
 }
 
-async function sendTaggedDocumentIfPresent(
+async function sendTaggedDocuments(
   telegram: TelegramAdapter,
   logger: Logger,
   rootRealPath: string,
   update: { updateId: number; userId: number; chatId: number },
-  documentPath: string | null,
-): Promise<string | null> {
-  if (!documentPath) {
-    return null;
+  documentPaths: string[],
+): Promise<string[]> {
+  if (documentPaths.length === 0) {
+    return [];
   }
 
-  try {
-    let { realPath, relativePath } = await resolveDocumentPathForUpload(rootRealPath, documentPath);
-    if (relativePath.startsWith("attachments/") && path.basename(relativePath).includes("scannerizzato")) {
-      const now = new Date();
-      const dateFolder = path.join(
-        String(now.getUTCFullYear()),
-        String(now.getUTCMonth() + 1).padStart(2, "0"),
-        String(now.getUTCDate()).padStart(2, "0"),
-      );
-      const generatedFolder = path.join(rootRealPath, GENERATED_SCANNED_PDFS_RELATIVE_DIR, dateFolder);
-      await mkdir(generatedFolder, { recursive: true });
-      const targetPath = path.join(generatedFolder, path.basename(relativePath));
-      await rename(realPath, targetPath);
-      realPath = await realpath(targetPath);
-      relativePath = path.relative(rootRealPath, realPath);
+  const warnings: string[] = [];
+  for (const documentPath of documentPaths) {
+    try {
+      const resolvedPath = await resolveDocumentPathForUpload(rootRealPath, documentPath);
+      const uploadPath = await relocateGeneratedDocumentIfNeeded(rootRealPath, resolvedPath);
+      const documentBlob = Bun.file(uploadPath.realPath);
+      await telegram.sendDocument(update.chatId, documentBlob, path.basename(uploadPath.relativePath), `File: ${uploadPath.relativePath}`);
+      logger.info("telegram_document_sent", {
+        updateId: update.updateId,
+        userId: update.userId,
+        chatId: update.chatId,
+        filePath: uploadPath.relativePath,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn("telegram_document_send_failed", {
+        updateId: update.updateId,
+        userId: update.userId,
+        chatId: update.chatId,
+        message,
+        documentPath,
+      });
+      warnings.push(`Documento non inviato (${message}).`);
     }
-
-    const documentBlob = Bun.file(realPath);
-    await telegram.sendDocument(update.chatId, documentBlob, path.basename(relativePath), `File: ${relativePath}`);
-    logger.info("telegram_document_sent", {
-      updateId: update.updateId,
-      userId: update.userId,
-      chatId: update.chatId,
-      filePath: relativePath,
-    });
-    return null;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.warn("telegram_document_send_failed", {
-      updateId: update.updateId,
-      userId: update.userId,
-      chatId: update.chatId,
-      message,
-      documentPath,
-    });
-    return `Documento non inviato (${message}).`;
   }
+
+  return warnings;
 }
 
 function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
@@ -258,6 +268,122 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
       clearTimeout(timeout);
     }
   }
+}
+
+async function runWithTypingAndTimeout<T>(params: {
+  telegram: TelegramAdapter;
+  logger: Logger;
+  chatId: number;
+  updateId: number;
+  userId: number;
+  timeoutMs: number;
+  operation: () => Promise<T>;
+}): Promise<T> {
+  const controller = new AbortController();
+  const typingLoop = startTypingLoop(
+    params.telegram,
+    params.logger,
+    params.chatId,
+    params.updateId,
+    params.userId,
+    controller.signal,
+  );
+
+  try {
+    return await withTimeout(params.operation(), params.timeoutMs);
+  } finally {
+    controller.abort();
+    await typingLoop;
+  }
+}
+
+async function dispatchAssistantReply(params: {
+  telegram: TelegramAdapter;
+  logger: Logger;
+  tts: ElevenLabsTts | null;
+  rootRealPath: string;
+  update: { updateId: number; userId: number; chatId: number };
+  rawReply: string;
+  noTtsPrefix?: string;
+  forceAudio?: boolean;
+  logContext?: { command?: string };
+}): Promise<void> {
+  const parsed = parseTelegramResponse(params.rawReply);
+  const warnings = await sendTaggedDocuments(
+    params.telegram,
+    params.logger,
+    params.rootRealPath,
+    params.update,
+    parsed.documentPaths,
+  );
+  const warningPrefix = warnings.length > 0 ? `${warnings.join("\n")}\n\n` : "";
+  const messageText = `${warningPrefix}${parsed.text}`.trim();
+  const outbound = messageText.slice(0, 4000);
+  const wantsAudio = params.forceAudio || parsed.mode === "audio";
+
+  if (wantsAudio && params.tts) {
+    try {
+      const audioBlob = await params.tts.synthesize(outbound);
+      await params.telegram.sendAudio(params.update.chatId, audioBlob, `reply-${params.update.updateId}.mp3`);
+      params.logger.info("telegram_audio_reply_sent", {
+        updateId: params.update.updateId,
+        userId: params.update.userId,
+        chatId: params.update.chatId,
+        textLength: outbound.length,
+        textPreview: previewText(outbound),
+        mode: wantsAudio ? "audio" : parsed.mode,
+        ...params.logContext,
+      });
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      params.logger.warn("telegram_audio_reply_failed", {
+        updateId: params.update.updateId,
+        userId: params.update.userId,
+        chatId: params.update.chatId,
+        message,
+        mode: wantsAudio ? "audio" : parsed.mode,
+        ...params.logContext,
+      });
+      await params.telegram.sendMessage(params.update.chatId, outbound);
+      params.logger.info("telegram_message_sent", {
+        updateId: params.update.updateId,
+        userId: params.update.userId,
+        chatId: params.update.chatId,
+        textLength: outbound.length,
+        textPreview: previewText(outbound),
+        mode: "text_fallback",
+        ...params.logContext,
+      });
+      return;
+    }
+  }
+
+  if (wantsAudio && !params.tts && params.noTtsPrefix) {
+    const fallback = `${params.noTtsPrefix}\n\n${outbound}`.slice(0, 4000);
+    await params.telegram.sendMessage(params.update.chatId, fallback);
+    params.logger.info("telegram_message_sent", {
+      updateId: params.update.updateId,
+      userId: params.update.userId,
+      chatId: params.update.chatId,
+      textLength: fallback.length,
+      textPreview: previewText(fallback),
+      mode: "text_fallback_no_tts",
+      ...params.logContext,
+    });
+    return;
+  }
+
+  await params.telegram.sendMessage(params.update.chatId, outbound);
+  params.logger.info("telegram_message_sent", {
+    updateId: params.update.updateId,
+    userId: params.update.userId,
+    chatId: params.update.chatId,
+    textLength: outbound.length,
+    textPreview: previewText(outbound),
+    mode: parsed.mode,
+    ...params.logContext,
+  });
 }
 
 async function main(): Promise<void> {
@@ -438,17 +564,16 @@ async function main(): Promise<void> {
               }
 
               let reply: string;
-              const typingController = new AbortController();
-              const typingLoop = startTypingLoop(
-                telegram,
-                logger,
-                update.chatId,
-                update.updateId,
-                update.userId,
-                typingController.signal,
-              );
               try {
-                reply = await withTimeout(agent.handleMessage(update.userId, lastPrompt, String(update.updateId)), MODEL_TIMEOUT_MS);
+                reply = await runWithTypingAndTimeout({
+                  telegram,
+                  logger,
+                  chatId: update.chatId,
+                  updateId: update.updateId,
+                  userId: update.userId,
+                  timeoutMs: MODEL_TIMEOUT_MS,
+                  operation: () => agent.handleMessage(update.userId, lastPrompt, String(update.updateId)),
+                });
                 handledMessages += 1;
               } catch (error) {
                 failedMessages += 1;
@@ -466,46 +591,17 @@ async function main(): Promise<void> {
                   logger.error("message_processing_failed", { message, userId: update.userId, command: "retry" });
                   reply = `Error: ${message}`;
                 }
-              } finally {
-                typingController.abort();
-                await typingLoop;
               }
 
-              const parsed = parseTelegramResponse(reply);
-              const documentWarning = await sendTaggedDocumentIfPresent(
+              await dispatchAssistantReply({
                 telegram,
                 logger,
-                dataRootRealPath,
+                tts,
+                rootRealPath: dataRootRealPath,
                 update,
-                parsed.documentPath,
-              );
-              const replyText = documentWarning ? `${documentWarning}\n\n${parsed.text}` : parsed.text;
-              if (parsed.mode === "audio" && tts) {
-                try {
-                  const audioBlob = await tts.synthesize(replyText.slice(0, 4000));
-                  await telegram.sendAudio(update.chatId, audioBlob, `retry-${update.updateId}.mp3`);
-                  logger.info("telegram_audio_reply_sent", {
-                    updateId: update.updateId,
-                    userId: update.userId,
-                    chatId: update.chatId,
-                    command: "retry",
-                    mode: parsed.mode,
-                  });
-                } catch (error) {
-                  const message = error instanceof Error ? error.message : String(error);
-                  logger.warn("telegram_audio_reply_failed", {
-                    updateId: update.updateId,
-                    userId: update.userId,
-                    chatId: update.chatId,
-                    command: "retry",
-                    mode: parsed.mode,
-                    message,
-                  });
-                  await sendCommandReply(replyText);
-                }
-              } else {
-                await sendCommandReply(replyText);
-              }
+                rawReply: reply,
+                logContext: { command: "retry" },
+              });
               continue;
             }
             case "audio": {
@@ -515,17 +611,16 @@ async function main(): Promise<void> {
               }
 
               let reply: string;
-              const typingController = new AbortController();
-              const typingLoop = startTypingLoop(
-                telegram,
-                logger,
-                update.chatId,
-                update.updateId,
-                update.userId,
-                typingController.signal,
-              );
               try {
-                reply = await withTimeout(agent.handleMessage(update.userId, command.args, String(update.updateId)), MODEL_TIMEOUT_MS);
+                reply = await runWithTypingAndTimeout({
+                  telegram,
+                  logger,
+                  chatId: update.chatId,
+                  updateId: update.updateId,
+                  userId: update.userId,
+                  timeoutMs: MODEL_TIMEOUT_MS,
+                  operation: () => agent.handleMessage(update.userId, command.args, String(update.updateId)),
+                });
                 handledMessages += 1;
                 lastPromptByUser.set(update.userId, command.args);
               } catch (error) {
@@ -544,48 +639,19 @@ async function main(): Promise<void> {
                   logger.error("message_processing_failed", { message, userId: update.userId, command: "audio" });
                   reply = `Error: ${message}`;
                 }
-              } finally {
-                typingController.abort();
-                await typingLoop;
               }
 
-              const parsed = parseTelegramResponse(reply);
-              const documentWarning = await sendTaggedDocumentIfPresent(
+              await dispatchAssistantReply({
                 telegram,
                 logger,
-                dataRootRealPath,
+                tts,
+                rootRealPath: dataRootRealPath,
                 update,
-                parsed.documentPath,
-              );
-              const replyText = documentWarning ? `${documentWarning}\n\n${parsed.text}` : parsed.text;
-              const audioText = replyText.slice(0, 4000);
-              if (!tts) {
-                await sendCommandReply("ELEVENLABS_API_KEY non configurata, invio testo:\n\n" + audioText.slice(0, 3800));
-                continue;
-              }
-
-              try {
-                const audioBlob = await tts.synthesize(audioText);
-                await telegram.sendAudio(update.chatId, audioBlob, `reply-${update.updateId}.mp3`);
-                logger.info("telegram_audio_reply_sent", {
-                  updateId: update.updateId,
-                  userId: update.userId,
-                  chatId: update.chatId,
-                  textLength: audioText.length,
-                  textPreview: previewText(audioText),
-                  command: "audio",
-                });
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                logger.warn("telegram_audio_reply_failed", {
-                  updateId: update.updateId,
-                  userId: update.userId,
-                  chatId: update.chatId,
-                  message,
-                  command: "audio",
-                });
-                await sendCommandReply(`Audio non disponibile (${message}), invio testo:\n\n${audioText.slice(0, 3600)}`);
-              }
+                rawReply: reply,
+                noTtsPrefix: "ELEVENLABS_API_KEY non configurata, invio testo:",
+                forceAudio: true,
+                logContext: { command: "audio" },
+              });
               continue;
             }
             case "sendaudio": {
@@ -669,80 +735,82 @@ async function main(): Promise<void> {
           continue;
         }
 
-        const typingController = new AbortController();
-        const typingLoop = startTypingLoop(
-          telegram,
-          logger,
-          update.chatId,
-          update.updateId,
-          update.userId,
-          typingController.signal,
-        );
         try {
-          const processedAttachments: ProcessedAttachment[] = [];
-          for (let index = 0; index < update.attachments.length; index += 1) {
-            const attachment = update.attachments[index];
-            if (!attachment) {
-              continue;
-            }
-            try {
-              const download = await telegram.downloadFileById(attachment.fileId);
-              const processed = await attachmentService.processIncoming({
-                attachment,
-                download,
-                updateId: update.updateId,
-                sequence: index,
-              });
-              processedAttachments.push(processed);
-              logger.info("telegram_attachment_saved", {
-                updateId: update.updateId,
-                userId: update.userId,
-                chatId: update.chatId,
-                kind: processed.kind,
-                relativePath: processed.relativePath,
-                sizeBytes: processed.sizeBytes,
-                inlineText: processed.inlineText !== null,
-              });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              logger.warn("telegram_attachment_processing_failed", {
-                updateId: update.updateId,
-                userId: update.userId,
-                chatId: update.chatId,
-                attachmentKind: attachment.kind,
-                message,
-              });
-            }
-          }
+          reply = await runWithTypingAndTimeout({
+            telegram,
+            logger,
+            chatId: update.chatId,
+            updateId: update.updateId,
+            userId: update.userId,
+            timeoutMs: MODEL_TIMEOUT_MS,
+            operation: async () => {
+              const processedAttachments: ProcessedAttachment[] = [];
+              for (let index = 0; index < update.attachments.length; index += 1) {
+                const attachment = update.attachments[index];
+                if (!attachment) {
+                  continue;
+                }
+                try {
+                  const download = await telegram.downloadFileById(attachment.fileId);
+                  const processed = await attachmentService.processIncoming({
+                    attachment,
+                    download,
+                    updateId: update.updateId,
+                    sequence: index,
+                  });
+                  processedAttachments.push(processed);
+                  logger.info("telegram_attachment_saved", {
+                    updateId: update.updateId,
+                    userId: update.userId,
+                    chatId: update.chatId,
+                    kind: processed.kind,
+                    relativePath: processed.relativePath,
+                    sizeBytes: processed.sizeBytes,
+                    inlineText: processed.inlineText !== null,
+                  });
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error);
+                  logger.warn("telegram_attachment_processing_failed", {
+                    updateId: update.updateId,
+                    userId: update.userId,
+                    chatId: update.chatId,
+                    attachmentKind: attachment.kind,
+                    message,
+                  });
+                }
+              }
 
-          const attachmentContext = attachmentService.buildPromptContext(processedAttachments);
+              const attachmentContext = attachmentService.buildPromptContext(processedAttachments);
 
-          if (!promptText && update.voiceFileId) {
-            const audio = await telegram.downloadFileById(update.voiceFileId);
-            promptText = await transcriber.transcribe(audio.fileBlob, audio.fileName, audio.mimeType ?? update.voiceMimeType);
-            logger.info("telegram_voice_transcribed", {
-              updateId: update.updateId,
-              userId: update.userId,
-              chatId: update.chatId,
-              transcriptionLength: promptText.length,
-              transcriptionPreview: previewText(promptText),
-            });
-          }
+              if (!promptText && update.voiceFileId) {
+                const audio = await telegram.downloadFileById(update.voiceFileId);
+                promptText = await transcriber.transcribe(audio.fileBlob, audio.fileName, audio.mimeType ?? update.voiceMimeType);
+                logger.info("telegram_voice_transcribed", {
+                  updateId: update.updateId,
+                  userId: update.userId,
+                  chatId: update.chatId,
+                  transcriptionLength: promptText.length,
+                  transcriptionPreview: previewText(promptText),
+                });
+              }
 
-          if (attachmentContext) {
-            const basePrompt = promptText ?? "Analizza gli allegati salvati e proponi i prossimi passi.";
-            promptText = [attachmentContext, "", "User message:", basePrompt].join("\n");
-          }
+              if (attachmentContext) {
+                const basePrompt = promptText ?? "Analizza gli allegati salvati e proponi i prossimi passi.";
+                promptText = [attachmentContext, "", "User message:", basePrompt].join("\n");
+              }
 
-          if (!promptText) {
-            reply = update.attachments.length > 0
-              ? "Non riesco a processare l'allegato inviato."
-              : "Posso gestire solo messaggi testuali o vocali.";
-          } else {
-            reply = await withTimeout(agent.handleMessage(update.userId, promptText, String(update.updateId)), MODEL_TIMEOUT_MS);
-            handledMessages += 1;
-            lastPromptByUser.set(update.userId, promptText);
-          }
+              if (!promptText) {
+                return update.attachments.length > 0
+                  ? "Non riesco a processare l'allegato inviato."
+                  : "Posso gestire solo messaggi testuali o vocali.";
+              }
+
+              const modelReply = await agent.handleMessage(update.userId, promptText, String(update.updateId));
+              handledMessages += 1;
+              lastPromptByUser.set(update.userId, promptText);
+              return modelReply;
+            },
+          });
         } catch (error) {
           failedMessages += 1;
           if (error instanceof Error && error.message === "MODEL_TIMEOUT") {
@@ -758,62 +826,16 @@ async function main(): Promise<void> {
             logger.error("message_processing_failed", { message, userId: update.userId });
             reply = `Error: ${message}`;
           }
-        } finally {
-          typingController.abort();
-          await typingLoop;
         }
 
-        const parsed = parseTelegramResponse(reply);
-        const documentWarning = await sendTaggedDocumentIfPresent(
+        await dispatchAssistantReply({
           telegram,
           logger,
-          dataRootRealPath,
+          tts,
+          rootRealPath: dataRootRealPath,
           update,
-          parsed.documentPath,
-        );
-        const outbound = (documentWarning ? `${documentWarning}\n\n${parsed.text}` : parsed.text).slice(0, 4000);
-        if (parsed.mode === "audio" && tts) {
-          try {
-            const audioBlob = await tts.synthesize(outbound);
-            await telegram.sendAudio(update.chatId, audioBlob, `reply-${update.updateId}.mp3`);
-            logger.info("telegram_audio_reply_sent", {
-              updateId: update.updateId,
-              userId: update.userId,
-              chatId: update.chatId,
-              textLength: outbound.length,
-              textPreview: previewText(outbound),
-              mode: parsed.mode,
-            });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            logger.warn("telegram_audio_reply_failed", {
-              updateId: update.updateId,
-              userId: update.userId,
-              chatId: update.chatId,
-              message,
-              mode: parsed.mode,
-            });
-            await telegram.sendMessage(update.chatId, outbound);
-            logger.info("telegram_message_sent", {
-              updateId: update.updateId,
-              userId: update.userId,
-              chatId: update.chatId,
-              textLength: outbound.length,
-              textPreview: previewText(outbound),
-              mode: "text_fallback",
-            });
-          }
-        } else {
-          await telegram.sendMessage(update.chatId, outbound);
-          logger.info("telegram_message_sent", {
-            updateId: update.updateId,
-            userId: update.userId,
-            chatId: update.chatId,
-            textLength: outbound.length,
-            textPreview: previewText(outbound),
-            mode: parsed.mode,
-          });
-        }
+          rawReply: reply,
+        });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";

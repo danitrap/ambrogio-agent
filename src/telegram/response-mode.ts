@@ -1,15 +1,12 @@
 export type ResponseMode = "text" | "audio";
 
-export type ParsedResponseMode = {
+export type ParsedTelegramResponse = {
   mode: ResponseMode;
   text: string;
+  documentPaths: string[];
 };
 
-export type ParsedTelegramResponse = ParsedResponseMode & {
-  documentPath: string | null;
-};
-
-export function parseResponseMode(rawText: string): ParsedResponseMode {
+function parseResponseMode(rawText: string): { mode: ResponseMode; text: string } {
   const trimmed = rawText.trim();
   const match = trimmed.match(/^<response_mode>\s*(audio|text)\s*<\/response_mode>\s*/i);
   if (!match) {
@@ -29,20 +26,17 @@ export function parseResponseMode(rawText: string): ParsedResponseMode {
 
 export function parseTelegramResponse(rawText: string): ParsedTelegramResponse {
   const modeParsed = parseResponseMode(rawText);
-  const documentMatch = modeParsed.text.match(/<telegram_document>\s*([^<]+?)\s*<\/telegram_document>\s*/i);
-  if (!documentMatch) {
-    return {
-      mode: modeParsed.mode,
-      text: modeParsed.text,
-      documentPath: null,
-    };
-  }
+  const documentMatches = Array.from(
+    modeParsed.text.matchAll(/<telegram_document>\s*([^<]+?)\s*<\/telegram_document>\s*/gi),
+  );
+  const documentPaths = documentMatches
+    .map((match) => match[1]?.trim() ?? "")
+    .filter((value) => value.length > 0);
+  const text = modeParsed.text.replaceAll(/<telegram_document>\s*([^<]+?)\s*<\/telegram_document>\s*/gi, "").trim();
 
-  const documentPath = documentMatch[1]?.trim() ?? "";
-  const text = modeParsed.text.replace(documentMatch[0], "").trim();
   return {
     mode: modeParsed.mode,
     text,
-    documentPath: documentPath.length > 0 ? documentPath : null,
+    documentPaths,
   };
 }
