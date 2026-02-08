@@ -12,6 +12,7 @@ import { GitSnapshotManager } from "./snapshots/git";
 import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
 import { parseTelegramCommand } from "./telegram/commands";
+import { parseResponseMode } from "./telegram/response-mode";
 import { FsTools } from "./tools/fs-tools";
 
 const TYPING_INTERVAL_MS = 4_000;
@@ -274,6 +275,7 @@ async function main(): Promise<void> {
                   "/status - stato runtime agente",
                   "/lastlog - ultimo riepilogo codex exec",
                   "/retry - riesegue l'ultimo prompt utente",
+                  "/audio <prompt> - esegue il prompt e risponde in audio",
                   "/memory - stato memoria conversazione",
                   "/skills - lista skills disponibili",
                   "/clear - cancella memoria conversazione",
@@ -370,7 +372,105 @@ async function main(): Promise<void> {
                 await typingLoop;
               }
 
-              await sendCommandReply(reply);
+              const parsed = parseResponseMode(reply);
+              if (parsed.mode === "audio" && tts) {
+                try {
+                  const audioBlob = await tts.synthesize(parsed.text.slice(0, 4000));
+                  await telegram.sendAudio(update.chatId, audioBlob, `retry-${update.updateId}.mp3`);
+                  logger.info("telegram_audio_reply_sent", {
+                    updateId: update.updateId,
+                    userId: update.userId,
+                    chatId: update.chatId,
+                    command: "retry",
+                    mode: parsed.mode,
+                  });
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error);
+                  logger.warn("telegram_audio_reply_failed", {
+                    updateId: update.updateId,
+                    userId: update.userId,
+                    chatId: update.chatId,
+                    command: "retry",
+                    mode: parsed.mode,
+                    message,
+                  });
+                  await sendCommandReply(parsed.text);
+                }
+              } else {
+                await sendCommandReply(parsed.text);
+              }
+              continue;
+            }
+            case "audio": {
+              if (!command.args) {
+                await sendCommandReply("Usage: /audio <prompt>");
+                continue;
+              }
+
+              let reply: string;
+              const typingController = new AbortController();
+              const typingLoop = startTypingLoop(
+                telegram,
+                logger,
+                update.chatId,
+                update.updateId,
+                update.userId,
+                typingController.signal,
+              );
+              try {
+                reply = await withTimeout(agent.handleMessage(update.userId, command.args, String(update.updateId)), MODEL_TIMEOUT_MS);
+                handledMessages += 1;
+                lastPromptByUser.set(update.userId, command.args);
+              } catch (error) {
+                failedMessages += 1;
+                if (error instanceof Error && error.message === "MODEL_TIMEOUT") {
+                  logger.error("request_timed_out", {
+                    updateId: update.updateId,
+                    userId: update.userId,
+                    chatId: update.chatId,
+                    timeoutMs: MODEL_TIMEOUT_MS,
+                    command: "audio",
+                  });
+                  reply = "Model backend unavailable right now. Riprova tra poco.";
+                } else {
+                  const message = error instanceof Error ? error.message : "Unknown error";
+                  logger.error("message_processing_failed", { message, userId: update.userId, command: "audio" });
+                  reply = `Error: ${message}`;
+                }
+              } finally {
+                typingController.abort();
+                await typingLoop;
+              }
+
+              const parsed = parseResponseMode(reply);
+              const audioText = parsed.text.slice(0, 4000);
+              if (!tts) {
+                await sendCommandReply("ELEVENLABS_API_KEY non configurata, invio testo:\n\n" + audioText.slice(0, 3800));
+                continue;
+              }
+
+              try {
+                const audioBlob = await tts.synthesize(audioText);
+                await telegram.sendAudio(update.chatId, audioBlob, `reply-${update.updateId}.mp3`);
+                logger.info("telegram_audio_reply_sent", {
+                  updateId: update.updateId,
+                  userId: update.userId,
+                  chatId: update.chatId,
+                  textLength: audioText.length,
+                  textPreview: previewText(audioText),
+                  command: "audio",
+                });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                logger.warn("telegram_audio_reply_failed", {
+                  updateId: update.updateId,
+                  userId: update.userId,
+                  chatId: update.chatId,
+                  message,
+                  command: "audio",
+                });
+                await sendCommandReply(`Audio non disponibile (${message}), invio testo:\n\n${audioText.slice(0, 3600)}`);
+              }
               continue;
             }
             case "sendaudio": {
@@ -503,8 +603,9 @@ async function main(): Promise<void> {
           await typingLoop;
         }
 
-        const outbound = reply.slice(0, 4000);
-        if (tts) {
+        const parsed = parseResponseMode(reply);
+        const outbound = parsed.text.slice(0, 4000);
+        if (parsed.mode === "audio" && tts) {
           try {
             const audioBlob = await tts.synthesize(outbound);
             await telegram.sendAudio(update.chatId, audioBlob, `reply-${update.updateId}.mp3`);
@@ -514,6 +615,7 @@ async function main(): Promise<void> {
               chatId: update.chatId,
               textLength: outbound.length,
               textPreview: previewText(outbound),
+              mode: parsed.mode,
             });
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -522,6 +624,7 @@ async function main(): Promise<void> {
               userId: update.userId,
               chatId: update.chatId,
               message,
+              mode: parsed.mode,
             });
             await telegram.sendMessage(update.chatId, outbound);
             logger.info("telegram_message_sent", {
@@ -530,6 +633,7 @@ async function main(): Promise<void> {
               chatId: update.chatId,
               textLength: outbound.length,
               textPreview: previewText(outbound),
+              mode: "text_fallback",
             });
           }
         } else {
@@ -540,6 +644,7 @@ async function main(): Promise<void> {
             chatId: update.chatId,
             textLength: outbound.length,
             textPreview: previewText(outbound),
+            mode: parsed.mode,
           });
         }
       }

@@ -6,7 +6,7 @@ Personal-only agent wrapper for Telegram with a secure `/data` boundary and Agen
 
 - Telegram long polling input
 - Telegram vocal message support with transcription (`gpt-4o-mini-transcribe`)
-- Optional audio replies via ElevenLabs TTS when `ELEVENLABS_API_KEY` is set
+- Optional audio replies via ElevenLabs TTS with `/audio <prompt>` when `ELEVENLABS_API_KEY` is set
 - Single-user allowlist (`TELEGRAM_ALLOWED_USER_ID`)
 - File tools scoped to `/data` only:
   - `list_files`

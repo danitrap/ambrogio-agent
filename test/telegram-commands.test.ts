@@ -14,6 +14,10 @@ describe("parseTelegramCommand", () => {
     expect(parseTelegramCommand("/SkIlLs")).toEqual({ name: "skills", args: "" });
   });
 
+  test("parses audio command with prompt args", () => {
+    expect(parseTelegramCommand("/audio dimmi il meteo")).toEqual({ name: "audio", args: "dimmi il meteo" });
+  });
+
   test("returns null for non-command text", () => {
     expect(parseTelegramCommand("ciao")).toBeNull();
   });
