@@ -14,7 +14,7 @@ FROM oven/bun:1.3.6-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache bash git nodejs npm
+RUN apk add --no-cache bash ffmpeg ghostscript imagemagick git nodejs npm
 RUN npm install -g @openai/codex
 COPY --from=acp-builder /build/codex-acp/target/release/codex-acp /usr/local/bin/codex-acp
 
