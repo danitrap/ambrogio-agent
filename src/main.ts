@@ -11,13 +11,8 @@ import { OpenAiTranscriber } from "./model/openai-transcriber";
 import { runAgentRequestWithTimeout } from "./runtime/agent-request";
 import { handleTelegramCommand } from "./runtime/command-handlers";
 import { HEARTBEAT_FILE_NAME, HEARTBEAT_INTERVAL_MS, runHeartbeatCycle } from "./runtime/heartbeat";
-import {
-  clearRecentTelegramMessages,
-  MAX_RECENT_TELEGRAM_MESSAGES,
-  loadRecentTelegramMessages,
-  saveRecentTelegramMessages,
-} from "./runtime/recent-telegram-history";
 import { sendTelegramTextReply } from "./runtime/message-sender";
+import { StateStore } from "./runtime/state-store";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
 import { TelegramAdapter } from "./telegram/adapter";
@@ -30,6 +25,7 @@ const MAX_TELEGRAM_AUDIO_BYTES = 49_000_000;
 const MAX_TELEGRAM_DOCUMENT_BYTES = 49_000_000;
 const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
 const GENERATED_SCANNED_PDFS_RELATIVE_DIR = "generated/scanned-pdfs";
+const MAX_RECENT_TELEGRAM_MESSAGES = 50;
 
 function previewText(value: string, max = 160): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
@@ -437,12 +433,15 @@ async function main(): Promise<void> {
   const transcriber = new OpenAiTranscriber(config.openaiApiKey);
   const attachmentService = new AttachmentService(config.dataRoot, MAX_INLINE_ATTACHMENT_TEXT_BYTES);
   const tts = config.elevenLabsApiKey ? new ElevenLabsTts(config.elevenLabsApiKey) : null;
+  const stateStore = await StateStore.open(config.dataRoot);
+  logger.info("state_store_opened", { dbPath: path.join(config.dataRoot, "runtime", "state.db") });
 
   const agent = new AgentService({
     allowlist,
     modelBridge,
     skills,
     logger,
+    conversationStore: stateStore,
   });
 
   logger.info("agent_started", {
@@ -455,9 +454,16 @@ async function main(): Promise<void> {
   let handledMessages = 0;
   let failedMessages = 0;
   let lastAuthorizedChatId: number | null = null;
+  let lastAuthorizedUserId: number | null = null;
   let lastTelegramMessageAtMs: number | null = null;
   let lastTelegramMessageSummary = "n/a";
-  const recentTelegramMessages = await loadRecentTelegramMessages(config.dataRoot);
+  const recentTelegramMessages = stateStore
+    .getRecentMessages(MAX_RECENT_TELEGRAM_MESSAGES)
+    .map((entry) => `${entry.createdAt} - ${entry.role}: ${entry.summary}`);
+  logger.debug("state_store_recent_messages_loaded", {
+    count: recentTelegramMessages.length,
+    limit: MAX_RECENT_TELEGRAM_MESSAGES,
+  });
   if (recentTelegramMessages.length > 0) {
     const lastEntry = recentTelegramMessages[recentTelegramMessages.length - 1];
     if (lastEntry) {
@@ -477,8 +483,16 @@ async function main(): Promise<void> {
   }
   const lastPromptByUser = new Map<number, string>();
   let heartbeatInFlight = false;
-  let heartbeatLastRunAt: string | null = null;
-  let heartbeatLastResult: "never" | "ok" | "ok_notice_sent" | "alert_sent" | "alert_dropped" | "skipped_inflight" = "never";
+  let heartbeatLastRunAt = stateStore.getRuntimeValue("heartbeat_last_run_at");
+  let heartbeatLastResult =
+    (stateStore.getRuntimeValue("heartbeat_last_result") as
+      | "never"
+      | "ok"
+      | "ok_notice_sent"
+      | "alert_sent"
+      | "alert_dropped"
+      | "skipped_inflight"
+      | null) ?? "never";
 
   const readHeartbeatDoc = async (): Promise<string | null> => {
     const heartbeatPath = `${config.dataRoot}/${HEARTBEAT_FILE_NAME}`;
@@ -502,19 +516,21 @@ async function main(): Promise<void> {
     }
   };
 
-  const persistRecentTelegramHistory = async (): Promise<void> => {
+  const recordRecentTelegramEntry = async (role: "user" | "assistant", summary: string, atMs?: number): Promise<void> => {
+    const timestamp = new Date(atMs ?? Date.now()).toISOString();
+    const normalized = summary.trim();
+    pushRecentTelegramMessage(`${timestamp} - ${role}: ${normalized}`);
     try {
-      await saveRecentTelegramMessages(config.dataRoot, recentTelegramMessages);
+      stateStore.appendRecentMessage(role, normalized, timestamp, MAX_RECENT_TELEGRAM_MESSAGES);
+      logger.debug("state_store_recent_message_written", {
+        role,
+        createdAt: timestamp,
+        limit: MAX_RECENT_TELEGRAM_MESSAGES,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.warn("telegram_history_persist_failed", { message });
     }
-  };
-
-  const recordRecentTelegramEntry = async (role: "user" | "assistant", summary: string, atMs?: number): Promise<void> => {
-    const timestamp = new Date(atMs ?? Date.now()).toISOString();
-    pushRecentTelegramMessage(`${timestamp} - ${role}: ${summary}`);
-    await persistRecentTelegramHistory();
   };
 
   const runHeartbeatPromptWithTimeout = async (prompt: string, requestId: string): Promise<string> => {
@@ -560,6 +576,11 @@ async function main(): Promise<void> {
     const recentMessages = recentTelegramMessages.length === 0
       ? ["none"]
       : recentTelegramMessages.slice(-5).map((entry, index) => `${index + 1}. ${entry}`);
+    const conversationContext = lastAuthorizedUserId === null
+      ? ["none"]
+      : stateStore
+        .getConversation(lastAuthorizedUserId, 8)
+        .map((entry, index) => `${index + 1}. ${entry.role}: ${entry.text}`);
     const todoPath = path.join(config.dataRoot, "TODO.md");
 
     return [
@@ -580,6 +601,8 @@ async function main(): Promise<void> {
       `Last telegram message summary: ${lastTelegramMessageSummary}`,
       "Recent telegram messages (last 5):",
       ...recentMessages,
+      "Conversation context (last 8 turns):",
+      ...conversationContext,
       "TODO review guidance: read TODO path directly before deciding follow-up.",
       `Last codex exec: ${codexSummary}`,
     ].join("\n");
@@ -591,11 +614,21 @@ async function main(): Promise<void> {
     if (heartbeatInFlight) {
       logger.warn("heartbeat_skipped_inflight");
       heartbeatLastResult = "skipped_inflight";
+      stateStore.setRuntimeValue("heartbeat_last_result", heartbeatLastResult);
+      logger.debug("state_store_runtime_value_written", {
+        key: "heartbeat_last_result",
+        value: heartbeatLastResult,
+      });
       return { status: "skipped_inflight" };
     }
 
     heartbeatInFlight = true;
     heartbeatLastRunAt = new Date().toISOString();
+    stateStore.setRuntimeValue("heartbeat_last_run_at", heartbeatLastRunAt);
+    logger.debug("state_store_runtime_value_written", {
+      key: "heartbeat_last_run_at",
+      value: heartbeatLastRunAt,
+    });
     const requestId = `heartbeat-${Date.now()}`;
     try {
       const runtimeStatus = buildHeartbeatRuntimeStatus();
@@ -612,6 +645,11 @@ async function main(): Promise<void> {
         requestId,
       });
       heartbeatLastResult = cycleResult.status;
+      stateStore.setRuntimeValue("heartbeat_last_result", heartbeatLastResult);
+      logger.debug("state_store_runtime_value_written", {
+        key: "heartbeat_last_result",
+        value: heartbeatLastResult,
+      });
       logger.info("heartbeat_finished", { trigger, requestId, status: cycleResult.status });
       return { status: cycleResult.status, requestId };
     } finally {
@@ -634,6 +672,7 @@ async function main(): Promise<void> {
         offset = Math.max(offset, update.updateId + 1);
         if (allowlist.isAllowed(update.userId)) {
           lastAuthorizedChatId = update.chatId;
+          lastAuthorizedUserId = update.userId;
         }
         lastTelegramMessageAtMs = Date.now();
         if (update.text) {
@@ -763,8 +802,18 @@ async function main(): Promise<void> {
             recentTelegramMessages.splice(0, recentTelegramMessages.length);
             lastTelegramMessageAtMs = null;
             lastTelegramMessageSummary = "n/a";
+            heartbeatLastRunAt = null;
+            heartbeatLastResult = "never";
             try {
-              await clearRecentTelegramMessages(config.dataRoot);
+              stateStore.clearRecentMessages();
+              logger.debug("state_store_recent_messages_cleared");
+              stateStore.clearRuntimeValues([
+                "heartbeat_last_run_at",
+                "heartbeat_last_result",
+              ]);
+              logger.debug("state_store_runtime_values_cleared", {
+                keys: ["heartbeat_last_run_at", "heartbeat_last_result"],
+              });
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               logger.warn("telegram_history_clear_failed", { message });

@@ -3,11 +3,19 @@ import type { Logger } from "../logging/audit";
 import type { ModelBridge } from "../model/types";
 import type { SkillDiscovery } from "../skills/discovery";
 
+type ConversationStore = {
+  getConversation: (userId: number, limit?: number) => Array<{ role: "user" | "assistant"; text: string }>;
+  appendConversationTurn: (userId: number, role: "user" | "assistant", text: string, maxEntries?: number) => void;
+  clearConversation: (userId: number) => void;
+  getConversationStats: (userId: number) => { entries: number; userTurns: number; assistantTurns: number; hasContext: boolean };
+};
+
 export type AgentDependencies = {
   allowlist: TelegramAllowlist;
   modelBridge: ModelBridge;
   skills: SkillDiscovery;
   logger: Logger;
+  conversationStore?: ConversationStore;
 };
 
 export class AgentService {
@@ -21,7 +29,15 @@ export class AgentService {
       return "Unauthorized user.";
     }
 
-    const history = this.historyByUser.get(userId) ?? [];
+    const history = this.deps.conversationStore
+      ? this.deps.conversationStore.getConversation(userId, 12)
+      : this.historyByUser.get(userId) ?? [];
+    if (this.deps.conversationStore) {
+      this.deps.logger.debug("state_store_conversation_loaded", {
+        userId,
+        entries: history.length,
+      });
+    }
     const contextualMessage = formatContextualMessage(history, text);
 
     const modelResponse = await this.deps.modelBridge.respond({
@@ -32,8 +48,17 @@ export class AgentService {
     });
     const responseText = modelResponse.text || "Done.";
 
-    this.pushHistory(userId, "user", text);
-    this.pushHistory(userId, "assistant", responseText);
+    if (this.deps.conversationStore) {
+      this.deps.conversationStore.appendConversationTurn(userId, "user", text, 12);
+      this.deps.conversationStore.appendConversationTurn(userId, "assistant", responseText, 12);
+      this.deps.logger.debug("state_store_conversation_written", {
+        userId,
+        writtenTurns: 2,
+      });
+    } else {
+      this.pushHistory(userId, "user", text);
+      this.pushHistory(userId, "assistant", responseText);
+    }
     return responseText;
   }
 
@@ -48,10 +73,23 @@ export class AgentService {
   }
 
   clearConversation(userId: number): void {
+    if (this.deps.conversationStore) {
+      this.deps.conversationStore.clearConversation(userId);
+      this.deps.logger.debug("state_store_conversation_cleared", { userId });
+      return;
+    }
     this.historyByUser.delete(userId);
   }
 
   getConversationStats(userId: number): { entries: number; userTurns: number; assistantTurns: number; hasContext: boolean } {
+    if (this.deps.conversationStore) {
+      const stats = this.deps.conversationStore.getConversationStats(userId);
+      this.deps.logger.debug("state_store_conversation_stats_loaded", {
+        userId,
+        entries: stats.entries,
+      });
+      return stats;
+    }
     const history = this.historyByUser.get(userId) ?? [];
     const userTurns = history.filter((entry) => entry.role === "user").length;
     const assistantTurns = history.length - userTurns;
