@@ -8,10 +8,6 @@ export type SkillMetadata = {
   skillPath: string;
 };
 
-export type HydratedSkill = SkillMetadata & {
-  instructions: string;
-};
-
 function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; body: string } {
   if (!raw.startsWith("---\n")) {
     return { frontmatter: {}, body: raw };
@@ -85,8 +81,4 @@ export class SkillDiscovery {
     return Array.from(skillById.values()).sort((a, b) => a.id.localeCompare(b.id));
   }
 
-  async hydrate(skill: SkillMetadata): Promise<HydratedSkill> {
-    const instructions = await fs.readFile(skill.skillPath, "utf8");
-    return { ...skill, instructions };
-  }
 }

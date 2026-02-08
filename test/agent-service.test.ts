@@ -4,16 +4,6 @@ import { AgentService } from "../src/app/agent-service";
 import { TelegramAllowlist } from "../src/auth/allowlist";
 import { Logger } from "../src/logging/audit";
 
-class FakeSkills {
-  async discover() {
-    return [];
-  }
-
-  async hydrate() {
-    throw new Error("hydrate should not be called");
-  }
-}
-
 describe("AgentService", () => {
   test("denies unauthorized users", async () => {
     const model: ModelBridge = {
@@ -23,7 +13,7 @@ describe("AgentService", () => {
     const service = new AgentService({
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
-      skills: new FakeSkills() as never,
+
       logger: new Logger("error"),
     });
 
@@ -43,7 +33,7 @@ describe("AgentService", () => {
     const service = new AgentService({
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
-      skills: new FakeSkills() as never,
+
       logger: new Logger("error"),
     });
 
@@ -71,7 +61,7 @@ describe("AgentService", () => {
     const service = new AgentService({
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
-      skills: new FakeSkills() as never,
+
       logger: new Logger("error"),
     });
 
@@ -92,7 +82,7 @@ describe("AgentService", () => {
     const service = new AgentService({
       allowlist: new TelegramAllowlist(1),
       modelBridge: model,
-      skills: new FakeSkills() as never,
+
       logger: new Logger("error"),
     });
 

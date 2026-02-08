@@ -239,7 +239,6 @@ async function main(): Promise<void> {
       skipped: bootstrapResult.skipped,
     });
   }
-  const skills = new SkillDiscovery(codexSkillsRoot);
   const modelBridge = new ExecBridge(config.codexCommand, config.codexArgs, logger, {
     cwd: config.dataRoot,
     env: {
@@ -257,7 +256,6 @@ async function main(): Promise<void> {
   const agent = new AgentService({
     allowlist,
     modelBridge,
-    skills,
     logger,
     conversationStore: stateStore,
   });
@@ -306,20 +304,6 @@ async function main(): Promise<void> {
     heartbeatLastRunAt: stateStore.getRuntimeValue("heartbeat_last_run_at"),
     heartbeatLastResult: stateStore.getRuntimeValue("heartbeat_last_result") ?? "never",
   });
-
-  const readHeartbeatDoc = async (): Promise<string | null> => {
-    const heartbeatPath = `${config.dataRoot}/${HEARTBEAT_FILE_NAME}`;
-    try {
-      return await readFile(heartbeatPath, "utf8");
-    } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-        return null;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      logger.warn("heartbeat_doc_read_failed", { heartbeatPath, message });
-      return null;
-    }
-  };
 
   const pushRecentTelegramMessage = (summary: string): void => {
     recentTelegramMessages.push(summary);
@@ -477,16 +461,6 @@ async function main(): Promise<void> {
       : `Task ${normalized} non consegnato; verra ritentato automaticamente all'heartbeat.`;
   };
 
-  const rpcSocketPath = (process.env.AMBROGIO_SOCKET_PATH ?? "").trim() || "/tmp/ambrogio-agent.sock";
-  await startTaskRpcServer({
-    socketPath: rpcSocketPath,
-    stateStore,
-    retryTaskDelivery: async (taskId) => {
-      return retryTaskDelivery(taskId);
-    },
-  });
-  logger.info("task_rpc_server_started", { socketPath: rpcSocketPath });
-
   const runDueScheduledTasks = async (): Promise<void> => {
     const due = stateStore.getDueScheduledTasks(10);
     for (const task of due) {
@@ -501,7 +475,6 @@ async function main(): Promise<void> {
         return modelBridge.respond({
           requestId,
           message: prompt,
-          skills: [],
           signal: controller.signal,
         });
       })(),
@@ -528,7 +501,7 @@ async function main(): Promise<void> {
     }
   };
 
-  const buildHeartbeatRuntimeStatus = async (): Promise<string> => {
+  const getRuntimeStatus = async (): Promise<Record<string, unknown>> => {
     const heartbeatState = heartbeatStateResolver();
     const nowMs = Date.now();
     const localNow = new Date(nowMs);
@@ -552,54 +525,49 @@ async function main(): Promise<void> {
       : "n/a";
     const recentMessages = recentTelegramMessages.length === 0
       ? ["none"]
-      : recentTelegramMessages.slice(-5).map((entry, index) => `${index + 1}. ${entry}`);
+      : recentTelegramMessages.slice(-5);
     const conversationContext = lastAuthorizedUserId === null
       ? ["none"]
       : stateStore
         .getConversation(lastAuthorizedUserId, 8)
-        .map((entry, index) => `${index + 1}. ${entry.role}: ${entry.text}`);
+        .map((entry) => `${entry.role}: ${entry.text}`);
     const todoPath = path.join(config.dataRoot, "TODO.md");
     const todoOpenItems = await readTodoSnapshot();
-    const pendingBackgroundTasks = stateStore.countPendingBackgroundTasks();
-    const scheduledTasks = stateStore.countScheduledTasks();
 
-    return [
-      "Runtime status:",
-      `Now: ${new Date(nowMs).toISOString()}`,
-      `Local timezone: ${localTimezone}`,
-      `Local date/time: ${localDateTime}`,
-      `Data root: ${config.dataRoot}`,
-      `TODO path: ${todoPath}`,
-      `Uptime: ${formatDuration(nowMs - startedAtMs)}`,
-      `Handled messages: ${handledMessages}`,
-      `Failed messages: ${failedMessages}`,
-      `Background tasks pending delivery: ${pendingBackgroundTasks}`,
-      `Delayed tasks scheduled: ${scheduledTasks}`,
-      `Heartbeat in flight: ${heartbeatState.heartbeatInFlight ? "yes" : "no"}`,
-      `Heartbeat last run: ${heartbeatState.heartbeatLastRunAt ?? "n/a"}`,
-      `Heartbeat last result: ${heartbeatState.heartbeatLastResult}`,
-      `Heartbeat quiet hours: ${heartbeatRunner.getQuietHoursRaw() ?? "disabled"}`,
-      `Heartbeat now in quiet hours: ${heartbeatRunner.isInQuietHours() ? "yes" : "no"}`,
-      `Last telegram message at: ${lastTelegramAt}`,
-      `Idle since last telegram message: ${idle}`,
-      `Last telegram message summary: ${lastTelegramMessageSummary}`,
-      "Recent telegram messages (last 5):",
-      ...recentMessages,
-      "Conversation context (last 8 turns):",
-      ...conversationContext,
-      "TODO snapshot (open items, max 10):",
-      ...todoOpenItems,
-      "TODO review guidance: read TODO path directly before deciding follow-up.",
-      `Last codex exec: ${codexSummary}`,
-    ].join("\n");
+    return {
+      now: new Date(nowMs).toISOString(),
+      localDateTime,
+      localTimezone,
+      dataRoot: config.dataRoot,
+      todoPath,
+      uptime: formatDuration(nowMs - startedAtMs),
+      handledMessages,
+      failedMessages,
+      backgroundTasksPendingDelivery: stateStore.countPendingBackgroundTasks(),
+      scheduledTasks: stateStore.countScheduledTasks(),
+      heartbeat: {
+        inFlight: heartbeatState.heartbeatInFlight,
+        lastRunAt: heartbeatState.heartbeatLastRunAt ?? null,
+        lastResult: heartbeatState.heartbeatLastResult,
+        quietHours: heartbeatRunner.getQuietHoursRaw() ?? "disabled",
+        inQuietHours: heartbeatRunner.isInQuietHours(),
+      },
+      lastTelegramMessage: {
+        at: lastTelegramAt,
+        idle,
+        summary: lastTelegramMessageSummary,
+      },
+      recentMessages,
+      conversationContext,
+      todoSnapshot: todoOpenItems,
+      lastCodexExec: codexSummary,
+    };
   };
 
   const heartbeatRunner = createHeartbeatRunner({
     logger,
     stateStore,
-    readHeartbeatDoc,
     runHeartbeatPromptWithTimeout,
-    buildHeartbeatRuntimeStatus,
     getAlertChatId: () => lastAuthorizedChatId,
     sendAlertMessage: async (chatId, message) => {
       await sendTelegramFormattedMessage({
@@ -614,6 +582,17 @@ async function main(): Promise<void> {
     quietHours,
   });
   heartbeatStateResolver = heartbeatRunner.getHeartbeatState;
+
+  const rpcSocketPath = (process.env.AMBROGIO_SOCKET_PATH ?? "").trim() || "/tmp/ambrogio-agent.sock";
+  await startTaskRpcServer({
+    socketPath: rpcSocketPath,
+    stateStore,
+    retryTaskDelivery: async (taskId) => {
+      return retryTaskDelivery(taskId);
+    },
+    getStatus: getRuntimeStatus,
+  });
+  logger.info("task_rpc_server_started", { socketPath: rpcSocketPath });
 
   setInterval(() => {
     void (async () => {
@@ -842,6 +821,7 @@ async function main(): Promise<void> {
             return lines.join("\n");
           },
           getSkillsReply: async () => {
+            const skills = new SkillDiscovery(codexSkillsRoot);
             const discovered = await skills.discover();
             if (discovered.length === 0) {
               return "Nessuna skill disponibile in /data/.codex/skills.";
@@ -944,9 +924,6 @@ async function main(): Promise<void> {
             }
             if (outcome.status === "ok") {
               return "Heartbeat completato: HEARTBEAT_OK (nessun alert).";
-            }
-            if (outcome.status === "ok_notice_sent") {
-              return "Heartbeat completato: HEARTBEAT_OK (messaggio HEARTBEAT.md inviato).";
             }
             if (outcome.status === "checkin_sent") {
               return "Heartbeat completato: check-in inviato su Telegram.";

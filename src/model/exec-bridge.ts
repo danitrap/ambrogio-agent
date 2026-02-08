@@ -36,24 +36,12 @@ function buildPromptText(request: ModelRequest): string {
     "- Do not include planning/debug/internal reasoning.\n" +
     "- Use available Codex tools (especially shell/apply_patch) when useful, then report the concrete result.\n" +
     "- Keep the answer concise and actionable.\n" +
-    "- For heartbeat requests, follow HEARTBEAT.md policy strictly: return exactly HEARTBEAT_OK when no action is needed; otherwise return compact JSON with action=checkin|alert and fields issue/impact/nextStep/todoItems.\n" +
-    "- For runtime task management, prefer using the natural-scheduler skill and ambrogioctl; keep responses concise and avoid inventing background-task IDs.\n" +
     "- Wrap only your final answer inside <final>...</final> tags.\n" +
     "- Do not invent custom XML-like tags.\n" +
-    "- To send the final answer as Telegram audio, put this at the beginning of the final answer: <response_mode>audio</response_mode>.\n" +
-    "- If audio is not needed, you can use <response_mode>text</response_mode> or omit response_mode.\n" +
     "- To ask runtime to upload a file on Telegram, include one or more tags in the final answer: <telegram_document>/data/path/to/file.ext</telegram_document>.\n" +
     "- Use only existing files under /data, and keep user-facing text outside tags.";
 
-  if (request.skills.length === 0) {
-    return `${personaContract}\n${responseContract}\n\nUser request:\n${request.message}`;
-  }
-
-  const skillSection = request.skills
-    .map((skill) => `# Skill: ${skill.name}\n${skill.instructions}`)
-    .join("\n\n");
-
-  return `${personaContract}\n${responseContract}\n\n${skillSection}\n\nUser request:\n${request.message}`;
+  return `${personaContract}\n${responseContract}\n\nUser request:\n${request.message}`;
 }
 
 function unwrapFinalTags(text: string): string {

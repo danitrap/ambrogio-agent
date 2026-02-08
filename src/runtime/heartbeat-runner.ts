@@ -5,7 +5,6 @@ import { isInQuietHours, type QuietHoursWindow } from "./heartbeat-quiet-hours";
 
 export type HeartbeatStatus =
   | "ok"
-  | "ok_notice_sent"
   | "checkin_sent"
   | "checkin_dropped"
   | "alert_sent"
@@ -26,8 +25,6 @@ export function createHeartbeatRunner(params: {
     setRuntimeValue: (key: string, value: string) => void;
   };
   runHeartbeatPromptWithTimeout: (prompt: string, requestId: string) => Promise<string>;
-  readHeartbeatDoc: () => Promise<string | null>;
-  buildHeartbeatRuntimeStatus: () => Promise<string>;
   getAlertChatId: () => number | null;
   sendAlertMessage: (chatId: number, message: string) => Promise<void>;
   recordRecentTelegramEntry: (role: "assistant" | "user", summary: string, atMs?: number) => Promise<void>;
@@ -64,12 +61,10 @@ export function createHeartbeatRunner(params: {
     const requestId = `heartbeat-${Date.now()}`;
 
     try {
-      const runtimeStatus = await params.buildHeartbeatRuntimeStatus();
       const cycleResult = await runHeartbeatCycle({
         logger: params.logger,
-        readHeartbeatDoc: params.readHeartbeatDoc,
         runHeartbeatPrompt: async ({ prompt, requestId: cycleRequestId }) =>
-          params.runHeartbeatPromptWithTimeout(`${prompt}\n\n${runtimeStatus}`, cycleRequestId),
+          params.runHeartbeatPromptWithTimeout(prompt, cycleRequestId),
         getAlertChatId: params.getAlertChatId,
         sendAlert: async (chatId, message) => {
           const fingerprint = createHash("sha1").update(message.trim()).digest("hex");

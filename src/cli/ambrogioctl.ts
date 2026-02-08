@@ -89,8 +89,47 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
   const sendRpc = deps.sendRpc ?? ((op: string, args: Record<string, unknown>) => defaultSendRpc(deps.socketPath, op, args));
 
   const [scope, action, ...args] = argv;
+
+  if (scope === "status") {
+    const json = hasFlag(action ? [action, ...args] : args, "--json");
+    try {
+      const response = await sendRpc("status.get", {});
+      if (!response.ok) {
+        stderr(response.error.message);
+        return mapErrorCodeToExit(response.error.code);
+      }
+      if (json) {
+        stdout(JSON.stringify(response.result));
+      } else {
+        const data = response.result as Record<string, unknown>;
+        const lines: string[] = [];
+        for (const [key, value] of Object.entries(data)) {
+          if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+            lines.push(`${key}:`);
+            for (const [subKey, subValue] of Object.entries(value as Record<string, unknown>)) {
+              lines.push(`  ${subKey}: ${String(subValue)}`);
+            }
+          } else if (Array.isArray(value)) {
+            lines.push(`${key}:`);
+            for (const item of value) {
+              lines.push(`  - ${String(item)}`);
+            }
+          } else {
+            lines.push(`${key}: ${String(value)}`);
+          }
+        }
+        stdout(lines.join("\n"));
+      }
+      return 0;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      stderr(message);
+      return 10;
+    }
+  }
+
   if (scope !== "tasks" || !action) {
-    stderr("Usage: ambrogioctl tasks <list|inspect|create|cancel|retry> [options]");
+    stderr("Usage: ambrogioctl <tasks|status> [options]");
     return 2;
   }
 

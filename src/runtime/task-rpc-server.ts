@@ -23,6 +23,7 @@ type TaskRpcServerOptions = {
   socketPath: string;
   stateStore: StateStore;
   retryTaskDelivery: (taskId: string) => Promise<string>;
+  getStatus?: () => Promise<Record<string, unknown>>;
 };
 
 type TaskRpcServerHandle = {
@@ -159,6 +160,14 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
     }
     const message = await options.retryTaskDelivery(taskId);
     return rpcOk({ taskId, message });
+  }
+
+  if (op === "status.get") {
+    if (!options.getStatus) {
+      return rpcError("BAD_REQUEST", "Status not available.");
+    }
+    const status = await options.getStatus();
+    return rpcOk(status);
   }
 
   return rpcError("BAD_REQUEST", `Unknown operation: ${op}`);

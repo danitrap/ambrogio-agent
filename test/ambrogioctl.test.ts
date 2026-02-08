@@ -51,6 +51,43 @@ describe("ambrogioctl", () => {
     expect(err[0]).toContain("Task non trovato");
   });
 
+  test("status emits json when requested", async () => {
+    const calls: RecordedCall[] = [];
+    const out: string[] = [];
+    const err: string[] = [];
+    const statusData = { now: "2026-02-08T10:00:00.000Z", uptime: "1h", handledMessages: 5 };
+
+    const code = await runAmbrogioCtl(["status", "--json"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendRpc: async (op, args) => {
+        calls.push({ op, args });
+        return { ok: true, result: statusData };
+      },
+      stdout: (line) => out.push(line),
+      stderr: (line) => err.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ op: "status.get", args: {} }]);
+    expect(JSON.parse(out[0] ?? "")).toEqual(statusData);
+    expect(err).toEqual([]);
+  });
+
+  test("status emits human-readable by default", async () => {
+    const out: string[] = [];
+
+    const code = await runAmbrogioCtl(["status"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendRpc: async () => ({ ok: true, result: { uptime: "2h", handledMessages: 10 } }),
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(out[0]).toContain("uptime: 2h");
+    expect(out[0]).toContain("handledMessages: 10");
+  });
+
   test("tasks create sends required payload", async () => {
     const calls: RecordedCall[] = [];
     const code = await runAmbrogioCtl(

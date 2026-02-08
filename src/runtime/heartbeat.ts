@@ -9,30 +9,15 @@ type HeartbeatLogger = {
 };
 
 export type HeartbeatCycleResult = {
-  status: "ok" | "ok_notice_sent" | "checkin_sent" | "checkin_dropped" | "alert_sent" | "alert_dropped";
+  status: "ok" | "checkin_sent" | "checkin_dropped" | "alert_sent" | "alert_dropped";
 };
 
 type HeartbeatDecision =
   | { action: "ok" }
   | { action: "checkin" | "alert"; issue: string; impact: string; nextStep: string; todoItems: string[] };
 
-export function buildHeartbeatPrompt(heartbeatDoc: string | null): string {
-  const base = [
-    "Run a lightweight periodic heartbeat check.",
-    "Follow HEARTBEAT.md instructions if provided below.",
-    "Use Runtime status details (including TODO path and data root) to inspect current state before deciding.",
-    "Do not resurrect stale tasks unless HEARTBEAT.md explicitly asks for it.",
-    `If there is nothing actionable, reply with exactly ${HEARTBEAT_OK}.`,
-    "If action is needed, reply with compact JSON only:",
-    '{"action":"checkin|alert","issue":"...","impact":"...","nextStep":"...","todoItems":["optional item 1","optional item 2"]}',
-    "Use action values as defined by HEARTBEAT.md policy.",
-  ].join("\n");
-
-  if (!heartbeatDoc || heartbeatDoc.trim().length === 0) {
-    return base;
-  }
-
-  return `${base}\n\nHEARTBEAT.md:\n${heartbeatDoc.trim()}`;
+export function buildHeartbeatPrompt(): string {
+  return "Run a heartbeat check.";
 }
 
 function formatAlertMessage(reason: string): string {
@@ -126,31 +111,8 @@ function formatDecisionMessage(decision: Exclude<HeartbeatDecision, { action: "o
   return lines.join("\n");
 }
 
-function extractOkReminderMessage(heartbeatDoc: string | null): string | null {
-  if (!heartbeatDoc) {
-    return null;
-  }
-
-  const marker = "always include the exact message:";
-  for (const line of heartbeatDoc.split("\n")) {
-    const normalized = line.trim().replace(/^-+\s*/, "");
-    const lower = normalized.toLowerCase();
-    const index = lower.indexOf(marker);
-    if (index === -1) {
-      continue;
-    }
-    const value = normalized.slice(index + marker.length).trim();
-    if (value.length > 0) {
-      return value;
-    }
-  }
-
-  return null;
-}
-
 export async function runHeartbeatCycle(params: {
   logger: HeartbeatLogger;
-  readHeartbeatDoc: () => Promise<string | null>;
   runHeartbeatPrompt: (args: { prompt: string; requestId: string }) => Promise<string>;
   getAlertChatId: () => number | null;
   sendAlert: (chatId: number, message: string) => Promise<"sent" | "dropped">;
@@ -158,37 +120,13 @@ export async function runHeartbeatCycle(params: {
   trigger?: "timer" | "manual";
   shouldSuppressCheckin?: () => boolean;
 }): Promise<HeartbeatCycleResult> {
-  let heartbeatDoc: string | null = null;
-
-  try {
-    heartbeatDoc = await params.readHeartbeatDoc();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    params.logger.warn("heartbeat_doc_read_failed", { requestId: params.requestId, message });
-  }
-
-  const prompt = buildHeartbeatPrompt(heartbeatDoc);
+  const prompt = buildHeartbeatPrompt();
   params.logger.info("heartbeat_started", { requestId: params.requestId });
 
   try {
     const response = await params.runHeartbeatPrompt({ prompt, requestId: params.requestId });
     const decision = parseHeartbeatDecision(response);
     if (decision?.action === "ok") {
-      const reminder = extractOkReminderMessage(heartbeatDoc);
-      if (reminder) {
-        const chatId = params.getAlertChatId();
-        if (chatId === null) {
-          params.logger.warn("heartbeat_ok_notice_dropped_no_chat", { requestId: params.requestId });
-          return { status: "alert_dropped" };
-        }
-        const sent = await params.sendAlert(chatId, reminder.slice(0, 4000));
-        if (sent === "dropped") {
-          params.logger.warn("heartbeat_ok_notice_dropped", { requestId: params.requestId, chatId });
-          return { status: "alert_dropped" };
-        }
-        params.logger.info("heartbeat_ok_notice_sent", { requestId: params.requestId, chatId });
-        return { status: "ok_notice_sent" };
-      }
       params.logger.info("heartbeat_ok", { requestId: params.requestId });
       return { status: "ok" };
     }

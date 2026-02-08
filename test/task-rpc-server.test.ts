@@ -124,6 +124,50 @@ describe("TaskRpcServer", () => {
     stateStore.close();
   });
 
+  test("status.get returns runtime status when getStatus is provided", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "task-rpc-"));
+    tempDirs.push(root);
+
+    const stateStore = await StateStore.open(root);
+    const socketPath = path.join(root, "runtime", "ambrogio-status.sock");
+    const statusData = { now: "2026-02-08T10:00:00.000Z", uptime: "1h", handledMessages: 5 };
+
+    const server = await startTaskRpcServer({
+      socketPath,
+      stateStore,
+      retryTaskDelivery: async () => "ok",
+      getStatus: async () => statusData,
+    });
+
+    const response = await rpcCall(socketPath, { op: "status.get" });
+    expect(response.ok).toBe(true);
+    expect(response.result).toEqual(statusData);
+
+    await server.close();
+    stateStore.close();
+  });
+
+  test("status.get returns error when getStatus is not provided", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "task-rpc-"));
+    tempDirs.push(root);
+
+    const stateStore = await StateStore.open(root);
+    const socketPath = path.join(root, "runtime", "ambrogio-nostatus.sock");
+
+    const server = await startTaskRpcServer({
+      socketPath,
+      stateStore,
+      retryTaskDelivery: async () => "ok",
+    });
+
+    const response = await rpcCall(socketPath, { op: "status.get" });
+    expect(response.ok).toBe(false);
+    expect(response.error).toEqual({ code: "BAD_REQUEST", message: "Status not available." });
+
+    await server.close();
+    stateStore.close();
+  });
+
   test("returns structured errors for invalid input and not found", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "task-rpc-"));
     tempDirs.push(root);

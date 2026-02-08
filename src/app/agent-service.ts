@@ -1,7 +1,6 @@
 import type { TelegramAllowlist } from "../auth/allowlist";
 import type { Logger } from "../logging/audit";
 import type { ModelBridge } from "../model/types";
-import type { SkillDiscovery } from "../skills/discovery";
 
 type ConversationStore = {
   getConversation: (userId: number, limit?: number) => Array<{ role: "user" | "assistant"; text: string }>;
@@ -13,7 +12,6 @@ type ConversationStore = {
 export type AgentDependencies = {
   allowlist: TelegramAllowlist;
   modelBridge: ModelBridge;
-  skills: SkillDiscovery;
   logger: Logger;
   conversationStore?: ConversationStore;
 };
@@ -43,7 +41,6 @@ export class AgentService {
     const modelResponse = await this.deps.modelBridge.respond({
       requestId,
       message: contextualMessage,
-      skills: [],
       signal,
     });
     const responseText = modelResponse.text || "Done.";

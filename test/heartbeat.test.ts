@@ -8,10 +8,9 @@ class StubLogger {
 }
 
 describe("heartbeat", () => {
-  test("buildHeartbeatPrompt includes HEARTBEAT.md content when provided", () => {
-    const prompt = buildHeartbeatPrompt("- check pending items");
-    expect(prompt).toContain("HEARTBEAT.md");
-    expect(prompt).toContain("check pending items");
+  test("buildHeartbeatPrompt returns fixed prompt", () => {
+    const prompt = buildHeartbeatPrompt();
+    expect(prompt).toBe("Run a heartbeat check.");
   });
 
   test("suppresses alert when response is HEARTBEAT_OK", async () => {
@@ -19,7 +18,6 @@ describe("heartbeat", () => {
 
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      readHeartbeatDoc: async () => null,
       runHeartbeatPrompt: async () => HEARTBEAT_OK,
       getAlertChatId: () => 123,
       sendAlert: async (chatId, message) => {
@@ -33,33 +31,11 @@ describe("heartbeat", () => {
     expect(sentAlerts).toHaveLength(0);
   });
 
-  test("sends deterministic reminder message configured in HEARTBEAT.md when response is HEARTBEAT_OK", async () => {
-    const sentAlerts: Array<{ chatId: number; message: string }> = [];
-
-    const result = await runHeartbeatCycle({
-      logger: new StubLogger(),
-      readHeartbeatDoc: async () => "- Always include the exact message: operational ping",
-      runHeartbeatPrompt: async () => HEARTBEAT_OK,
-      getAlertChatId: () => 999,
-      sendAlert: async (chatId, message) => {
-        sentAlerts.push({ chatId, message });
-        return "sent";
-      },
-      requestId: "heartbeat-test",
-    });
-
-    expect(result.status).toBe("ok_notice_sent");
-    expect(sentAlerts).toHaveLength(1);
-    expect(sentAlerts[0]?.chatId).toBe(999);
-    expect(sentAlerts[0]?.message).toBe("operational ping");
-  });
-
   test("sends alert when response differs from HEARTBEAT_OK", async () => {
     const sentAlerts: Array<{ chatId: number; message: string }> = [];
 
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      readHeartbeatDoc: async () => "",
       runHeartbeatPrompt: async () => "Need attention",
       getAlertChatId: () => 456,
       sendAlert: async (chatId, message) => {
@@ -80,7 +56,6 @@ describe("heartbeat", () => {
 
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      readHeartbeatDoc: async () => null,
       runHeartbeatPrompt: async () => "Something broke",
       getAlertChatId: () => null,
       sendAlert: async () => {
@@ -99,7 +74,6 @@ describe("heartbeat", () => {
 
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      readHeartbeatDoc: async () => null,
       runHeartbeatPrompt: async () => {
         throw new Error("MODEL_TIMEOUT");
       },
@@ -120,7 +94,6 @@ describe("heartbeat", () => {
     const sentAlerts: string[] = [];
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      readHeartbeatDoc: async () => null,
       runHeartbeatPrompt: async () =>
         JSON.stringify({
           action: "alert",
@@ -147,7 +120,6 @@ describe("heartbeat", () => {
     const sentAlerts: string[] = [];
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      readHeartbeatDoc: async () => null,
       runHeartbeatPrompt: async () =>
         JSON.stringify({
           action: "checkin",
@@ -172,7 +144,6 @@ describe("heartbeat", () => {
   test("drops heartbeat alert when sender deduplicates", async () => {
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      readHeartbeatDoc: async () => null,
       runHeartbeatPrompt: async () => "Need attention",
       getAlertChatId: () => 456,
       sendAlert: async () => "dropped",
@@ -186,7 +157,6 @@ describe("heartbeat", () => {
     let sent = false;
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      readHeartbeatDoc: async () => null,
       runHeartbeatPrompt: async () =>
         JSON.stringify({
           action: "checkin",
@@ -213,7 +183,6 @@ describe("heartbeat", () => {
     let sent = false;
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      readHeartbeatDoc: async () => null,
       runHeartbeatPrompt: async () =>
         JSON.stringify({
           action: "alert",
@@ -240,7 +209,6 @@ describe("heartbeat", () => {
     let sent = false;
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      readHeartbeatDoc: async () => null,
       runHeartbeatPrompt: async () =>
         JSON.stringify({
           action: "checkin",
