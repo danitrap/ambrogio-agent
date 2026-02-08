@@ -450,41 +450,6 @@ async function main(): Promise<void> {
     }
   };
 
-  const buildActiveTasksReply = (): string => {
-    const active = stateStore.getActiveBackgroundTasks(10);
-    if (active.length === 0) {
-      return "Nessun task attivo.";
-    }
-    const lines = ["Task attivi (scheduled/running/pending delivery):"];
-    for (const task of active) {
-      const runAt = task.runAt ? ` | runAt=${task.runAt}` : "";
-      lines.push(
-        `- ${task.taskId} | kind=${task.kind} | status=${task.status}${runAt} | created=${task.createdAt} | preview=${task.requestPreview}`,
-      );
-    }
-    return lines.join("\n");
-  };
-
-  const buildTaskDetailsReply = (taskId: string): string => {
-    const task = stateStore.getBackgroundTask(taskId.trim());
-    if (!task) {
-      return `Task non trovato: ${taskId}`;
-    }
-    return [
-      `Task: ${task.taskId}`,
-      `Kind: ${task.kind}`,
-      `Status: ${task.status}`,
-      `Created: ${task.createdAt}`,
-      `Run at: ${task.runAt ?? "n/a"}`,
-      `Timed out at: ${task.timedOutAt}`,
-      `Completed at: ${task.completedAt ?? "n/a"}`,
-      `Delivered at: ${task.deliveredAt ?? "n/a"}`,
-      `Command: ${task.command ?? "n/a"}`,
-      `Preview: ${task.requestPreview}`,
-      `Error: ${task.errorMessage ?? "none"}`,
-    ].join("\n");
-  };
-
   const retryTaskDelivery = async (taskId: string): Promise<string> => {
     const normalized = taskId.trim();
     if (!normalized) {
@@ -994,33 +959,7 @@ async function main(): Promise<void> {
             }
             return "Heartbeat completato: alert necessario ma nessuna chat autorizzata disponibile.";
           },
-          getTasksReply: () => {
-            return buildActiveTasksReply();
-          },
-          getTaskReply: (taskId: string) => {
-            return buildTaskDetailsReply(taskId);
-          },
-          retryTaskDelivery: async (taskId: string) => {
-            const normalized = taskId.trim();
-            if (!normalized) {
-              return "Usage: /retrytask <task-id>";
-            }
-            return retryTaskDelivery(normalized);
-          },
-          cancelTask: async (taskId: string) => {
-            const normalized = taskId.trim();
-            if (!normalized) {
-              return "Usage: /canceltask <task-id>";
-            }
-            const result = stateStore.cancelTask(normalized);
-            if (result === "not_found") {
-              return `Task non trovato: ${normalized}`;
-            }
-            if (result === "already_done") {
-              return `Task ${normalized} non cancellabile (gia completato/fallito).`;
-            }
-            return `Task ${normalized} cancellato.`;
-          },
+
         });
         if (commandHandled) {
           return;

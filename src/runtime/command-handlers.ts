@@ -24,10 +24,7 @@ export async function handleTelegramCommand(params: {
   dispatchAssistantReply: (reply: string, options: { command: string; forceAudio?: boolean; noTtsPrefix?: string }) => Promise<void>;
   sendAudioFile: (inputPath: string) => Promise<string>;
   runHeartbeatNow: () => Promise<string | null>;
-  getTasksReply: () => string;
-  getTaskReply: (taskId: string) => string;
-  retryTaskDelivery: (taskId: string) => Promise<string>;
-  cancelTask: (taskId: string) => Promise<string>;
+
 }): Promise<boolean> {
   const command = params.command;
   if (!command) {
@@ -54,10 +51,6 @@ export async function handleTelegramCommand(params: {
           "/clear - cancella memoria conversazione",
           "/heartbeat - forza un heartbeat immediato",
           "/sendaudio <path> - invia un file audio da /data",
-          "/tasks - lista task background in attesa",
-          "/task <id> - dettaglio task background",
-          "/retrytask <id> - ritenta invio risultato task",
-          "/canceltask <id> - cancella task schedulato/in corso",
         ].join("\n"),
       );
       return true;
@@ -118,30 +111,7 @@ export async function handleTelegramCommand(params: {
         }
       }
       return true;
-    case "tasks":
-      await params.sendCommandReply(params.getTasksReply());
-      return true;
-    case "task":
-      if (!command.args) {
-        await params.sendCommandReply("Usage: /task <task-id>");
-        return true;
-      }
-      await params.sendCommandReply(params.getTaskReply(command.args));
-      return true;
-    case "retrytask":
-      if (!command.args) {
-        await params.sendCommandReply("Usage: /retrytask <task-id>");
-        return true;
-      }
-      await params.sendCommandReply(await params.retryTaskDelivery(command.args));
-      return true;
-    case "canceltask":
-      if (!command.args) {
-        await params.sendCommandReply("Usage: /canceltask <task-id>");
-        return true;
-      }
-      await params.sendCommandReply(await params.cancelTask(command.args));
-      return true;
+
     case "clear":
       params.clearConversation(params.update.userId);
       await params.clearRuntimeState();

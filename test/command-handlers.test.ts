@@ -19,10 +19,6 @@ function buildParams(overrides: Partial<Parameters<typeof handleTelegramCommand>
     dispatchAssistantReply: async () => undefined,
     sendAudioFile: async () => "",
     runHeartbeatNow: async () => "",
-    getTasksReply: () => "",
-    getTaskReply: () => "",
-    retryTaskDelivery: async () => "",
-    cancelTask: async () => "",
     ...overrides,
   };
 }
@@ -105,58 +101,4 @@ describe("handleTelegramCommand", () => {
     expect(replies).toEqual(["Memoria conversazione cancellata."]);
   });
 
-  test("tasks command returns tasks summary", async () => {
-    const replies: string[] = [];
-    const handled = await handleTelegramCommand(buildParams({
-      command: { name: "tasks", args: "" },
-      getTasksReply: () => "task-1",
-      sendCommandReply: async (text) => {
-        replies.push(text);
-      },
-    }));
-
-    expect(handled).toBe(true);
-    expect(replies).toEqual(["task-1"]);
-  });
-
-  test("task command requires id", async () => {
-    const replies: string[] = [];
-    const handled = await handleTelegramCommand(buildParams({
-      command: { name: "task", args: "" },
-      sendCommandReply: async (text) => {
-        replies.push(text);
-      },
-    }));
-
-    expect(handled).toBe(true);
-    expect(replies).toEqual(["Usage: /task <task-id>"]);
-  });
-
-  test("retrytask command delegates retry", async () => {
-    const replies: string[] = [];
-    const handled = await handleTelegramCommand(buildParams({
-      command: { name: "retrytask", args: "bg-1" },
-      retryTaskDelivery: async (taskId) => `retry ${taskId}`,
-      sendCommandReply: async (text) => {
-        replies.push(text);
-      },
-    }));
-
-    expect(handled).toBe(true);
-    expect(replies).toEqual(["retry bg-1"]);
-  });
-
-  test("canceltask command delegates cancel", async () => {
-    const replies: string[] = [];
-    const handled = await handleTelegramCommand(buildParams({
-      command: { name: "canceltask", args: "bg-1" },
-      cancelTask: async (taskId) => `cancel ${taskId}`,
-      sendCommandReply: async (text) => {
-        replies.push(text);
-      },
-    }));
-
-    expect(handled).toBe(true);
-    expect(replies).toEqual(["cancel bg-1"]);
-  });
 });
