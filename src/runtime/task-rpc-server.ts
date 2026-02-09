@@ -321,6 +321,89 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
     }
   }
 
+  // State operations
+  if (op === "state.get") {
+    const key = readString(args.key);
+    if (!key) {
+      return rpcError("BAD_REQUEST", "key is required and must not be empty.");
+    }
+    const value = options.stateStore.getRuntimeValue(key);
+    if (value === null) {
+      return rpcError("NOT_FOUND", `Key not found: ${key}`);
+    }
+    return rpcOk({ key, value });
+  }
+
+  if (op === "state.set") {
+    const key = readString(args.key);
+    const value = readString(args.value);
+    if (!key || value === null) {
+      return rpcError("BAD_REQUEST", "key and value are required and must not be empty.");
+    }
+    options.stateStore.setRuntimeValue(key, value);
+    return rpcOk({ key, value });
+  }
+
+  if (op === "state.delete") {
+    const keys = Array.isArray(args.keys)
+      ? args.keys.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : [];
+    if (keys.length === 0) {
+      return rpcError("BAD_REQUEST", "keys array is required and must not be empty.");
+    }
+    options.stateStore.clearRuntimeValues(keys);
+    return rpcOk({ deleted: keys.length });
+  }
+
+  if (op === "state.list") {
+    const pattern = readString(args.pattern) ?? undefined;
+    const entries = options.stateStore.getAllRuntimeKeys(pattern);
+    return rpcOk({ entries });
+  }
+
+  // Conversation operations
+  if (op === "conversation.clear") {
+    const userId = readNumber(args.userId);
+    if (userId === null) {
+      return rpcError("BAD_REQUEST", "userId is required.");
+    }
+    const statsBefore = options.stateStore.getConversationStats(userId);
+    options.stateStore.clearConversation(userId);
+    return rpcOk({ deleted: statsBefore.entries, userId });
+  }
+
+  if (op === "conversation.list") {
+    const userId = readNumber(args.userId);
+    if (userId === null) {
+      return rpcError("BAD_REQUEST", "userId is required.");
+    }
+    const limitRaw = readNumber(args.limit);
+    const limit = limitRaw && limitRaw > 0 ? Math.floor(limitRaw) : 12;
+    const entries = options.stateStore.getConversation(userId, limit);
+    return rpcOk({ entries, userId, count: entries.length });
+  }
+
+  if (op === "conversation.export") {
+    const userId = readNumber(args.userId);
+    if (userId === null) {
+      return rpcError("BAD_REQUEST", "userId is required.");
+    }
+    const limitRaw = readNumber(args.limit);
+    const limit = limitRaw && limitRaw > 0 ? Math.floor(limitRaw) : 1000;
+    const entries = options.stateStore.getConversationWithTimestamps(userId, limit);
+    const stats = options.stateStore.getConversationStats(userId);
+    return rpcOk({ entries, stats, userId });
+  }
+
+  if (op === "conversation.stats") {
+    const userId = readNumber(args.userId);
+    if (userId === null) {
+      return rpcError("BAD_REQUEST", "userId is required.");
+    }
+    const stats = options.stateStore.getConversationStats(userId);
+    return rpcOk({ ...stats, userId });
+  }
+
   return rpcError("BAD_REQUEST", `Unknown operation: ${op}`);
 }
 

@@ -330,4 +330,214 @@ describe("TaskRpcServer", () => {
   // 1. task-rpc-server.ts records message after successful send
   // 2. main.ts wires up recordRecentTelegramEntry callback
   // 3. Messages sent via ambrogioctl telegram send-message are registered in recentMessages
+
+  test("state operations: get, set, delete, list with pattern matching", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "task-rpc-state-"));
+    tempDirs.push(root);
+
+    const stateStore = await StateStore.open(root);
+    const socketPath = path.join(root, "runtime", "ambrogio.sock");
+    const server = await startTaskRpcServer({
+      socketPath,
+      stateStore,
+      retryTaskDelivery: async () => "ok",
+    });
+
+    // Test state.set
+    const set1 = await rpcCall(socketPath, {
+      op: "state.set",
+      args: { key: "test:key1", value: "value1" },
+    });
+    expect(set1).toEqual({ ok: true, result: { key: "test:key1", value: "value1" } });
+
+    const set2 = await rpcCall(socketPath, {
+      op: "state.set",
+      args: { key: "test:key2", value: "value2" },
+    });
+    expect(set2.ok).toBe(true);
+
+    const set3 = await rpcCall(socketPath, {
+      op: "state.set",
+      args: { key: "other:key", value: "value3" },
+    });
+    expect(set3.ok).toBe(true);
+
+    // Test state.get
+    const get1 = await rpcCall(socketPath, {
+      op: "state.get",
+      args: { key: "test:key1" },
+    });
+    expect(get1).toEqual({ ok: true, result: { key: "test:key1", value: "value1" } });
+
+    // Test state.get not found
+    const getMissing = await rpcCall(socketPath, {
+      op: "state.get",
+      args: { key: "missing:key" },
+    });
+    expect(getMissing).toEqual({ ok: false, error: { code: "NOT_FOUND", message: "Key not found: missing:key" } });
+
+    // Test state.list without pattern
+    const listAll = await rpcCall(socketPath, {
+      op: "state.list",
+      args: {},
+    });
+    expect(listAll.ok).toBe(true);
+    const allEntries = (listAll.result as { entries: Array<{ key: string; value: string }> }).entries;
+    expect(allEntries.length).toBe(3);
+    expect(allEntries.map((e) => e.key).sort()).toEqual(["other:key", "test:key1", "test:key2"]);
+
+    // Test state.list with pattern
+    const listPattern = await rpcCall(socketPath, {
+      op: "state.list",
+      args: { pattern: "test:*" },
+    });
+    expect(listPattern.ok).toBe(true);
+    const patternEntries = (listPattern.result as { entries: Array<{ key: string; value: string }> }).entries;
+    expect(patternEntries.length).toBe(2);
+    expect(patternEntries.map((e) => e.key).sort()).toEqual(["test:key1", "test:key2"]);
+
+    // Test state.delete
+    const delete1 = await rpcCall(socketPath, {
+      op: "state.delete",
+      args: { keys: ["test:key1", "other:key"] },
+    });
+    expect(delete1).toEqual({ ok: true, result: { deleted: 2 } });
+
+    // Verify deletion
+    const listAfterDelete = await rpcCall(socketPath, {
+      op: "state.list",
+      args: {},
+    });
+    expect(listAfterDelete.ok).toBe(true);
+    const remainingEntries = (listAfterDelete.result as { entries: Array<{ key: string; value: string }> }).entries;
+    expect(remainingEntries.length).toBe(1);
+    expect(remainingEntries[0]?.key).toBe("test:key2");
+
+    // Test error cases
+    const setNoKey = await rpcCall(socketPath, {
+      op: "state.set",
+      args: { key: "", value: "test" },
+    });
+    expect(setNoKey).toEqual({
+      ok: false,
+      error: { code: "BAD_REQUEST", message: "key and value are required and must not be empty." },
+    });
+
+    const deleteNoKeys = await rpcCall(socketPath, {
+      op: "state.delete",
+      args: { keys: [] },
+    });
+    expect(deleteNoKeys).toEqual({
+      ok: false,
+      error: { code: "BAD_REQUEST", message: "keys array is required and must not be empty." },
+    });
+
+    await server.close();
+    stateStore.close();
+  });
+
+  test("conversation operations: clear, list, export, stats", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "task-rpc-conversation-"));
+    tempDirs.push(root);
+
+    const stateStore = await StateStore.open(root);
+    const socketPath = path.join(root, "runtime", "ambrogio.sock");
+    const server = await startTaskRpcServer({
+      socketPath,
+      stateStore,
+      retryTaskDelivery: async () => "ok",
+    });
+
+    const userId = 123;
+
+    // Add some conversation entries
+    stateStore.appendConversationTurn(userId, "user", "Hello", 12);
+    stateStore.appendConversationTurn(userId, "assistant", "Hi there!", 12);
+    stateStore.appendConversationTurn(userId, "user", "How are you?", 12);
+
+    // Test conversation.stats
+    const stats = await rpcCall(socketPath, {
+      op: "conversation.stats",
+      args: { userId },
+    });
+    expect(stats).toEqual({
+      ok: true,
+      result: {
+        entries: 3,
+        userTurns: 2,
+        assistantTurns: 1,
+        hasContext: true,
+        userId: 123,
+      },
+    });
+
+    // Test conversation.list
+    const list = await rpcCall(socketPath, {
+      op: "conversation.list",
+      args: { userId, limit: 2 },
+    });
+    expect(list.ok).toBe(true);
+    const listResult = list.result as {
+      entries: Array<{ role: string; text: string }>;
+      userId: number;
+      count: number;
+    };
+    expect(listResult.count).toBe(2);
+    expect(listResult.entries.length).toBe(2);
+    expect(listResult.entries[0]?.text).toBe("Hi there!");
+    expect(listResult.entries[1]?.text).toBe("How are you?");
+
+    // Test conversation.export
+    const exportResult = await rpcCall(socketPath, {
+      op: "conversation.export",
+      args: { userId },
+    });
+    expect(exportResult.ok).toBe(true);
+    const exportData = exportResult.result as {
+      entries: Array<{ role: string; text: string; createdAt: string }>;
+      stats: { entries: number; userTurns: number; assistantTurns: number; hasContext: boolean };
+      userId: number;
+    };
+    expect(exportData.entries.length).toBe(3);
+    expect(exportData.entries[0]?.text).toBe("Hello");
+    expect(exportData.entries[0]?.createdAt).toBeDefined();
+    expect(exportData.stats.entries).toBe(3);
+    expect(exportData.userId).toBe(123);
+
+    // Test conversation.clear
+    const clear = await rpcCall(socketPath, {
+      op: "conversation.clear",
+      args: { userId },
+    });
+    expect(clear).toEqual({ ok: true, result: { deleted: 3, userId: 123 } });
+
+    // Verify conversation was cleared
+    const statsAfterClear = await rpcCall(socketPath, {
+      op: "conversation.stats",
+      args: { userId },
+    });
+    expect(statsAfterClear).toEqual({
+      ok: true,
+      result: {
+        entries: 0,
+        userTurns: 0,
+        assistantTurns: 0,
+        hasContext: false,
+        userId: 123,
+      },
+    });
+
+    // Test error cases
+    const statsNoUserId = await rpcCall(socketPath, {
+      op: "conversation.stats",
+      args: {},
+    });
+    expect(statsNoUserId).toEqual({
+      ok: false,
+      error: { code: "BAD_REQUEST", message: "userId is required." },
+    });
+
+    await server.close();
+    stateStore.close();
+  });
 });

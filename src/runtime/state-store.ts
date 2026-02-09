@@ -164,6 +164,27 @@ export class StateStore {
     this.db.run(`DELETE FROM runtime_kv WHERE key IN (${placeholders})`, keys);
   }
 
+  getAllRuntimeKeys(pattern?: string): Array<{ key: string; value: string; updatedAt: string }> {
+    let query = "SELECT key, value, updated_at FROM runtime_kv";
+    const params: string[] = [];
+
+    if (pattern) {
+      // Convert glob pattern (* and ?) to SQL LIKE pattern (% and _)
+      const sqlPattern = pattern.replace(/\*/g, "%").replace(/\?/g, "_");
+      query += " WHERE key LIKE ?1";
+      params.push(sqlPattern);
+    }
+
+    query += " ORDER BY key ASC";
+
+    const rows = this.db.query(query).all(...params) as Array<{ key: string; value: string; updated_at: string }>;
+    return rows.map((row) => ({
+      key: row.key,
+      value: row.value,
+      updatedAt: row.updated_at,
+    }));
+  }
+
   getRecentMessages(limit: number): RecentMessageEntry[] {
     const rows = this.db
       .query(
@@ -214,6 +235,26 @@ export class StateStore {
       )
       .all(userId, limit) as ConversationRow[];
     return rows.slice().reverse().map((row) => ({ role: row.role, text: row.text }));
+  }
+
+  getConversationWithTimestamps(
+    userId: number,
+    limit = 12,
+  ): Array<{ role: "user" | "assistant"; text: string; createdAt: string }> {
+    const rows = this.db
+      .query(
+        `SELECT role, text, created_at
+         FROM conversation_messages
+         WHERE user_id = ?1
+         ORDER BY id DESC
+         LIMIT ?2`,
+      )
+      .all(userId, limit) as Array<{ role: "user" | "assistant"; text: string; created_at: string }>;
+    return rows.slice().reverse().map((row) => ({
+      role: row.role,
+      text: row.text,
+      createdAt: row.created_at,
+    }));
   }
 
   appendConversationTurn(userId: number, role: "user" | "assistant", text: string, maxEntries = 12): void {

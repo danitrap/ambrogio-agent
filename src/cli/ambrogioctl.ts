@@ -207,8 +207,290 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
     }
   }
 
+  if (scope === "state") {
+    if (!action) {
+      stderr("Usage: ambrogioctl state <get|set|delete|list> [options]");
+      return 2;
+    }
+
+    const json = hasFlag(args, "--json");
+
+    if (action === "get") {
+      const key = readFlag(args, "--key") ?? args[0];
+      if (!key) {
+        stderr("key is required (use --key flag or positional argument)");
+        return 2;
+      }
+
+      try {
+        const response = await sendRpc("state.get", { key });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as { key: string; value: string };
+          stdout(`${result.key}=${result.value}`);
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "set") {
+      const key = readFlag(args, "--key") ?? args[0];
+      const value = readFlag(args, "--value") ?? args[1];
+      if (!key || value === null || value === undefined) {
+        stderr("key and value are required (use --key and --value flags or positional arguments)");
+        return 2;
+      }
+
+      try {
+        const response = await sendRpc("state.set", { key, value });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as { key: string; value: string };
+          stdout(`Set ${result.key}=${result.value}`);
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "delete") {
+      const keys = args.filter((arg) => !arg.startsWith("--"));
+      if (keys.length === 0) {
+        stderr("at least one key is required");
+        return 2;
+      }
+
+      try {
+        const response = await sendRpc("state.delete", { keys });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as { deleted: number };
+          stdout(`Deleted ${result.deleted} key(s)`);
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "list") {
+      const pattern = readFlag(args, "--pattern") ?? undefined;
+
+      try {
+        const response = await sendRpc("state.list", { pattern });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as { entries: Array<{ key: string; value: string; updatedAt: string }> };
+          if (result.entries.length === 0) {
+            stdout("No keys found.");
+          } else {
+            stdout(result.entries.map((entry) => `${entry.key}=${entry.value}`).join("\n"));
+          }
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    stderr(`Unknown action: ${action}`);
+    return 2;
+  }
+
+  if (scope === "conversation") {
+    if (!action) {
+      stderr("Usage: ambrogioctl conversation <clear|list|export|stats> [options]");
+      return 2;
+    }
+
+    const json = hasFlag(args, "--json");
+    const userIdRaw = readFlag(args, "--user-id") ?? process.env.TELEGRAM_ALLOWED_USER_ID;
+    if (!userIdRaw) {
+      stderr("--user-id is required (or set TELEGRAM_ALLOWED_USER_ID environment variable)");
+      return 2;
+    }
+    const userId = Number(userIdRaw);
+    if (Number.isNaN(userId)) {
+      stderr("--user-id must be a valid number");
+      return 2;
+    }
+
+    if (action === "clear") {
+      try {
+        const response = await sendRpc("conversation.clear", { userId });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as { deleted: number; userId: number };
+          stdout(`Cleared ${result.deleted} conversation entries for user ${result.userId}`);
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "list") {
+      const limitRaw = readFlag(args, "--limit");
+      const limit = limitRaw ? Number(limitRaw) : undefined;
+      if (limit !== undefined && (Number.isNaN(limit) || limit <= 0)) {
+        stderr("--limit must be a positive number");
+        return 2;
+      }
+
+      try {
+        const response = await sendRpc("conversation.list", { userId, limit });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as {
+            entries: Array<{ role: "user" | "assistant"; text: string }>;
+            userId: number;
+            count: number;
+          };
+          if (result.entries.length === 0) {
+            stdout("No conversation entries found.");
+          } else {
+            const lines = result.entries.map((entry, index) => {
+              const truncated = entry.text.length > 80 ? `${entry.text.slice(0, 77)}...` : entry.text;
+              return `${index + 1}. [${entry.role}] ${truncated}`;
+            });
+            stdout(lines.join("\n"));
+          }
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "export") {
+      const format = readFlag(args, "--format") ?? "text";
+      if (format !== "text" && format !== "json") {
+        stderr("--format must be either 'text' or 'json'");
+        return 2;
+      }
+
+      try {
+        const response = await sendRpc("conversation.export", { userId });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+
+        const result = response.result as {
+          entries: Array<{ role: "user" | "assistant"; text: string; createdAt: string }>;
+          stats: { entries: number; userTurns: number; assistantTurns: number; hasContext: boolean };
+          userId: number;
+        };
+
+        if (format === "json" || json) {
+          stdout(JSON.stringify(result, null, 2));
+        } else {
+          const lines: string[] = [
+            `=== Conversation Export for User ${result.userId} ===`,
+            `Total entries: ${result.stats.entries}`,
+            `User turns: ${result.stats.userTurns}`,
+            `Assistant turns: ${result.stats.assistantTurns}`,
+            "",
+          ];
+          for (const entry of result.entries) {
+            lines.push(`[${entry.createdAt}] ${entry.role.toUpperCase()}:`);
+            lines.push(entry.text);
+            lines.push("");
+          }
+          stdout(lines.join("\n"));
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "stats") {
+      try {
+        const response = await sendRpc("conversation.stats", { userId });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as {
+            entries: number;
+            userTurns: number;
+            assistantTurns: number;
+            hasContext: boolean;
+            userId: number;
+          };
+          stdout([
+            `userId: ${result.userId}`,
+            `entries: ${result.entries}`,
+            `userTurns: ${result.userTurns}`,
+            `assistantTurns: ${result.assistantTurns}`,
+            `hasContext: ${result.hasContext}`,
+          ].join("\n"));
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    stderr(`Unknown action: ${action}`);
+    return 2;
+  }
+
   if (scope !== "tasks" || !action) {
-    stderr("Usage: ambrogioctl <tasks|status|telegram> [options]");
+    stderr("Usage: ambrogioctl <tasks|status|telegram|state|conversation> [options]");
     return 2;
   }
 
