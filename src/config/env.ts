@@ -34,7 +34,7 @@ export function loadConfig(): AppConfig {
   const codexArgsRaw = Bun.env.CODEX_ARGS;
   const codexArgs = codexArgsRaw
     ? codexArgsRaw.split(" ").map((part) => part.trim()).filter(Boolean)
-    : ["--dangerously-bypass-approvals-and-sandbox", "-c", "instructions=codex_fs"];
+    : ["--dangerously-bypass-approvals-and-sandbox"];
 
   return {
     telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),
