@@ -130,9 +130,34 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
 
   if (scope === "telegram") {
     if (!action) {
-      stderr("Usage: ambrogioctl telegram <send-photo|send-audio|send-document> --path <absolute-path-under-data-root> [--json]");
+      stderr("Usage: ambrogioctl telegram <send-message|send-photo|send-audio|send-document> --text <text> | --path <absolute-path-under-data-root> [--json]");
       return 2;
     }
+
+    // Handle send-message separately
+    if (action === "send-message") {
+      const text = readFlag(args, "--text");
+      if (!text) {
+        stderr("Missing --text flag");
+        return 2;
+      }
+
+      try {
+        const response = await sendRpc("telegram.sendMessage", { text });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        stdout("Message sent successfully.");
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(`Failed to send message: ${message}`);
+        return 10;
+      }
+    }
+
+    // Handle media commands (send-photo, send-audio, send-document)
     const json = hasFlag(args, "--json");
     const mediaPath = readFlag(args, "--path");
     if (!mediaPath) {

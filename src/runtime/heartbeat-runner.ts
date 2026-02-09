@@ -1,16 +1,7 @@
-import { createHash } from "node:crypto";
-import { shouldDeduplicateHeartbeatMessage } from "./heartbeat-dedup";
 import { runHeartbeatCycle } from "./heartbeat";
 import { isInQuietHours, type QuietHoursWindow } from "./heartbeat-quiet-hours";
 
-export type HeartbeatStatus =
-  | "ok"
-  | "checkin_sent"
-  | "checkin_dropped"
-  | "alert_sent"
-  | "alert_dropped"
-  | "skipped_quiet_hours"
-  | "skipped_inflight";
+export type HeartbeatStatus = "completed" | "error" | "skipped_inflight" | "skipped_quiet_hours";
 
 type LoggerLike = {
   info: (message: string, fields?: Record<string, unknown>) => void;
@@ -26,12 +17,6 @@ export function createHeartbeatRunner(params: {
     setRuntimeValue: (key: string, value: string) => void;
   };
   runHeartbeatPromptWithTimeout: (prompt: string, requestId: string) => Promise<string>;
-  getAlertChatId: () => number | null;
-  fallbackAlertChatId?: number | null;
-  sendAlertMessage: (chatId: number, message: string) => Promise<void>;
-  recordRecentTelegramEntry: (role: "assistant" | "user", summary: string, atMs?: number) => Promise<void>;
-  previewText: (value: string, max?: number) => string;
-  dedupWindowMs: number;
   quietHours: QuietHoursWindow | null;
 }) {
   let heartbeatInFlight = false;
@@ -40,92 +25,39 @@ export function createHeartbeatRunner(params: {
     (params.stateStore.getRuntimeValue("heartbeat_last_result") as HeartbeatStatus | "never" | null) ?? "never";
 
   const runScheduledHeartbeat = async (
-    trigger: "timer" | "manual",
+    trigger: "timer" | "manual"
   ): Promise<{ status: HeartbeatStatus; requestId?: string }> => {
     if (heartbeatInFlight) {
       params.logger.warn("heartbeat_skipped_inflight");
       heartbeatLastResult = "skipped_inflight";
       params.stateStore.setRuntimeValue("heartbeat_last_result", heartbeatLastResult);
-      params.logger.debug("state_store_runtime_value_written", {
-        key: "heartbeat_last_result",
-        value: heartbeatLastResult,
-      });
       return { status: "skipped_inflight" };
+    }
+
+    // Quiet hours check (SOLO per timer trigger, non per manual)
+    if (trigger === "timer" && isInQuietHours(params.quietHours)) {
+      params.logger.info("heartbeat_skipped_quiet_hours", { trigger });
+      heartbeatLastResult = "skipped_quiet_hours";
+      params.stateStore.setRuntimeValue("heartbeat_last_result", heartbeatLastResult);
+      return { status: "skipped_quiet_hours" };
     }
 
     heartbeatInFlight = true;
     heartbeatLastRunAt = new Date().toISOString();
     params.stateStore.setRuntimeValue("heartbeat_last_run_at", heartbeatLastRunAt);
-    params.logger.debug("state_store_runtime_value_written", {
-      key: "heartbeat_last_run_at",
-      value: heartbeatLastRunAt,
-    });
     const requestId = `heartbeat-${Date.now()}`;
 
     try {
-      if (trigger === "timer" && isInQuietHours(params.quietHours)) {
-        heartbeatLastResult = "skipped_quiet_hours";
-        params.stateStore.setRuntimeValue("heartbeat_last_result", heartbeatLastResult);
-        params.logger.debug("state_store_runtime_value_written", {
-          key: "heartbeat_last_result",
-          value: heartbeatLastResult,
-        });
-        params.logger.info("heartbeat_skipped_quiet_hours", { trigger, requestId });
-        params.logger.info("heartbeat_finished", { trigger, requestId, status: heartbeatLastResult });
-        return { status: heartbeatLastResult, requestId };
-      }
-
       const cycleResult = await runHeartbeatCycle({
         logger: params.logger,
         runHeartbeatPrompt: async ({ prompt, requestId: cycleRequestId }) =>
           params.runHeartbeatPromptWithTimeout(prompt, cycleRequestId),
-        getAlertChatId: () => params.getAlertChatId() ?? params.fallbackAlertChatId ?? null,
-        sendAlert: async (chatId, message) => {
-          const fingerprint = createHash("sha1").update(message.trim()).digest("hex");
-          const nowMs = Date.now();
-          const nowIso = new Date(nowMs).toISOString();
-          const lastFingerprint = params.stateStore.getRuntimeValue("heartbeat_last_alert_fingerprint");
-          const lastAlertAt = params.stateStore.getRuntimeValue("heartbeat_last_alert_at");
-          if (trigger === "timer" && shouldDeduplicateHeartbeatMessage({
-            lastFingerprint,
-            lastSentAtIso: lastAlertAt,
-            nextFingerprint: fingerprint,
-            nowMs,
-            dedupWindowMs: params.dedupWindowMs,
-          })) {
-            params.logger.info("heartbeat_alert_deduplicated", {
-              chatId,
-              fingerprint,
-              lastAlertAt,
-              dedupWindowMs: params.dedupWindowMs,
-            });
-            return "dropped";
-          }
-          await params.sendAlertMessage(chatId, message);
-          await params.recordRecentTelegramEntry("assistant", `heartbeat alert: ${params.previewText(message, 120)}`);
-          params.stateStore.setRuntimeValue("heartbeat_last_alert_fingerprint", fingerprint);
-          params.stateStore.setRuntimeValue("heartbeat_last_alert_at", nowIso);
-          params.logger.debug("state_store_runtime_value_written", {
-            key: "heartbeat_last_alert_fingerprint",
-            value: fingerprint,
-          });
-          params.logger.debug("state_store_runtime_value_written", {
-            key: "heartbeat_last_alert_at",
-            value: nowIso,
-          });
-          return "sent";
-        },
         requestId,
-        trigger,
-        shouldSuppressCheckin: () => isInQuietHours(params.quietHours),
       });
+
       heartbeatLastResult = cycleResult.status;
       params.stateStore.setRuntimeValue("heartbeat_last_result", heartbeatLastResult);
-      params.logger.debug("state_store_runtime_value_written", {
-        key: "heartbeat_last_result",
-        value: heartbeatLastResult,
-      });
-      params.logger.info("heartbeat_finished", { trigger, requestId, status: cycleResult.status });
+      params.logger.info("heartbeat_finished", { requestId, status: cycleResult.status });
       return { status: cycleResult.status, requestId };
     } finally {
       heartbeatInFlight = false;

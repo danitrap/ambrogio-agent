@@ -18,23 +18,16 @@ Use this skill when Signor Daniele asks to send a local file/photo/audio on Tele
   - generic file -> `send-document`
 - Do not fallback automatically between media types.
 
-## CLI Path Resolution
+## Workflow
 
-Use one of these commands (in order):
-
-1. `bun run /app/src/cli/ambrogioctl.ts telegram <action> --path "<absolute-path>" --json`
-2. `bun run /data/../src/cli/ambrogioctl.ts telegram <action> --path "<absolute-path>" --json`
+1. Identify target file path and intended media type.
+2. If missing/ambiguous, ask one concise clarification.
+3. Call the matching `ambrogioctl telegram <action> --path "<absolute-path>" --json`.
 
 Where `<action>` is one of:
 - `send-photo`
 - `send-audio`
 - `send-document`
-
-## Workflow
-
-1. Identify target file path and intended media type.
-2. If missing/ambiguous, ask one concise clarification.
-3. Call the matching `ambrogioctl telegram ... --json`.
 4. Parse JSON result and report concise confirmation.
 
 ## Error Handling

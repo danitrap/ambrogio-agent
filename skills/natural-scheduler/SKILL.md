@@ -18,28 +18,20 @@ Handle runtime task operations directly from natural-language requests.
 - Do not invent task IDs.
 - Always execute task operations through `ambrogioctl`.
 - If request is ambiguous between runtime task and TODO, ask explicit confirmation before executing.
-
-## CLI Path Resolution
-
-Use one of these commands (in order):
-
-1. `bun run /app/src/cli/ambrogioctl.ts ...` (Docker runtime)
-2. `bun run /data/../src/cli/ambrogioctl.ts ...` (local dev from `/data`)
-
-Always append `--json` and parse results before replying.
+- Always append `--json` to ambrogioctl commands and parse results before replying.
 
 ## Supported Intents (Runtime Tasks)
 
 - List tasks:
-  - `... tasks list --json`
+  - `ambrogioctl tasks list --json`
 - Inspect task:
-  - `... tasks inspect --id <taskId> --json`
+  - `ambrogioctl tasks inspect --id <taskId> --json`
 - Create delayed task:
-  - `... tasks create --run-at <ISO> --prompt "<text>" --user-id <id> --chat-id <id> --json`
+  - `ambrogioctl tasks create --run-at <ISO> --prompt "<text>" --user-id <id> --chat-id <id> --json`
 - Cancel task:
-  - `... tasks cancel --id <taskId> --json`
+  - `ambrogioctl tasks cancel --id <taskId> --json`
 - Retry delivery:
-  - `... tasks retry --id <taskId> --json`
+  - `ambrogioctl tasks retry --id <taskId> --json`
 
 ## Time Handling
 

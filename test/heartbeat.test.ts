@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildHeartbeatPrompt, HEARTBEAT_OK, runHeartbeatCycle } from "../src/runtime/heartbeat";
+import { buildHeartbeatPrompt, runHeartbeatCycle } from "../src/runtime/heartbeat";
 
 class StubLogger {
   info(): void {}
@@ -13,221 +13,39 @@ describe("heartbeat", () => {
     expect(prompt).toBe("Run a heartbeat check.");
   });
 
-  test("suppresses alert when response is HEARTBEAT_OK", async () => {
-    const sentAlerts: Array<{ chatId: number; message: string }> = [];
-
+  test("executes heartbeat prompt and completes successfully", async () => {
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      runHeartbeatPrompt: async () => HEARTBEAT_OK,
-      getAlertChatId: () => 123,
-      sendAlert: async (chatId, message) => {
-        sentAlerts.push({ chatId, message });
-        return "sent";
-      },
-      requestId: "heartbeat-test",
+      runHeartbeatPrompt: async () => "Skill executed", // La risposta non importa
+      requestId: "test-123",
     });
 
-    expect(result.status).toBe("ok");
-    expect(sentAlerts).toHaveLength(0);
+    expect(result.status).toBe("completed");
+    expect(result.requestId).toBe("test-123");
   });
 
-  test("sends alert when response differs from HEARTBEAT_OK", async () => {
-    const sentAlerts: Array<{ chatId: number; message: string }> = [];
-
-    const result = await runHeartbeatCycle({
-      logger: new StubLogger(),
-      runHeartbeatPrompt: async () => "Need attention",
-      getAlertChatId: () => 456,
-      sendAlert: async (chatId, message) => {
-        sentAlerts.push({ chatId, message });
-        return "sent";
-      },
-      requestId: "heartbeat-test",
-    });
-
-    expect(result.status).toBe("alert_sent");
-    expect(sentAlerts).toHaveLength(1);
-    expect(sentAlerts[0]?.chatId).toBe(456);
-    expect(sentAlerts[0]?.message).toContain("Need attention");
-  });
-
-  test("drops alert when no authorized chat is available", async () => {
-    let sent = false;
-
-    const result = await runHeartbeatCycle({
-      logger: new StubLogger(),
-      runHeartbeatPrompt: async () => "Something broke",
-      getAlertChatId: () => null,
-      sendAlert: async () => {
-        sent = true;
-        return "sent";
-      },
-      requestId: "heartbeat-test",
-    });
-
-    expect(result.status).toBe("alert_dropped");
-    expect(sent).toBe(false);
-  });
-
-  test("sends alert on execution error", async () => {
-    const sentAlerts: string[] = [];
-
+  test("handles execution errors gracefully", async () => {
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
       runHeartbeatPrompt: async () => {
-        throw new Error("MODEL_TIMEOUT");
+        throw new Error("Test error");
       },
-      getAlertChatId: () => 321,
-      sendAlert: async (_chatId, message) => {
-        sentAlerts.push(message);
-        return "sent";
-      },
-      requestId: "heartbeat-test",
+      requestId: "test-456",
     });
 
-    expect(result.status).toBe("alert_sent");
-    expect(sentAlerts).toHaveLength(1);
-    expect(sentAlerts[0]).toContain("MODEL_TIMEOUT");
+    expect(result.status).toBe("error");
+    expect(result.requestId).toBe("test-456");
   });
 
-  test("formats structured heartbeat decision as alert message", async () => {
-    const sentAlerts: string[] = [];
+  test("completes even with different response content", async () => {
+    // The skill handles everything autonomously, so the response content doesn't matter
     const result = await runHeartbeatCycle({
       logger: new StubLogger(),
-      runHeartbeatPrompt: async () =>
-        JSON.stringify({
-          action: "alert",
-          issue: "TODO scaduto",
-          impact: "Rischio di dimenticare follow-up",
-          nextStep: "Invia reminder oggi",
-          todoItems: ["Scrivere a Marco", "Confermare riunione"],
-        }),
-      getAlertChatId: () => 321,
-      sendAlert: async (_chatId, message) => {
-        sentAlerts.push(message);
-        return "sent";
-      },
-      requestId: "heartbeat-test",
+      runHeartbeatPrompt: async () => "Some random response",
+      requestId: "test-789",
     });
 
-    expect(result.status).toBe("alert_sent");
-    expect(sentAlerts).toHaveLength(1);
-    expect(sentAlerts[0]).toContain("Issue: TODO scaduto");
-    expect(sentAlerts[0]).toContain("TODO focus:");
-  });
-
-  test("sends check-in message when decision action is checkin", async () => {
-    const sentAlerts: string[] = [];
-    const result = await runHeartbeatCycle({
-      logger: new StubLogger(),
-      runHeartbeatPrompt: async () =>
-        JSON.stringify({
-          action: "checkin",
-          issue: "Idle oltre soglia",
-          impact: "Rischio di perdere un follow-up",
-          nextStep: "Invia check-in breve",
-          todoItems: [],
-        }),
-      getAlertChatId: () => 321,
-      sendAlert: async (_chatId, message) => {
-        sentAlerts.push(message);
-        return "sent";
-      },
-      requestId: "heartbeat-test",
-    });
-
-    expect(result.status).toBe("checkin_sent");
-    expect(sentAlerts).toHaveLength(1);
-    expect(sentAlerts[0]).toContain("Heartbeat check-in:");
-  });
-
-  test("drops heartbeat alert when sender deduplicates", async () => {
-    const result = await runHeartbeatCycle({
-      logger: new StubLogger(),
-      runHeartbeatPrompt: async () => "Need attention",
-      getAlertChatId: () => 456,
-      sendAlert: async () => "dropped",
-      requestId: "heartbeat-test",
-    });
-
-    expect(result.status).toBe("alert_dropped");
-  });
-
-  test("suppresses timer check-in during quiet hours", async () => {
-    let sent = false;
-    const result = await runHeartbeatCycle({
-      logger: new StubLogger(),
-      runHeartbeatPrompt: async () =>
-        JSON.stringify({
-          action: "checkin",
-          issue: "Idle oltre soglia",
-          impact: "Rischio di perdere un follow-up",
-          nextStep: "Invia check-in breve",
-          todoItems: [],
-        }),
-      getAlertChatId: () => 999,
-      sendAlert: async () => {
-        sent = true;
-        return "sent";
-      },
-      requestId: "heartbeat-test",
-      trigger: "timer",
-      shouldSuppressCheckin: () => true,
-    });
-
-    expect(result.status).toBe("checkin_dropped");
-    expect(sent).toBe(false);
-  });
-
-  test("does not suppress timer alerts during quiet hours", async () => {
-    let sent = false;
-    const result = await runHeartbeatCycle({
-      logger: new StubLogger(),
-      runHeartbeatPrompt: async () =>
-        JSON.stringify({
-          action: "alert",
-          issue: "Errore runtime",
-          impact: "Agente non operativo",
-          nextStep: "Intervento manuale",
-          todoItems: [],
-        }),
-      getAlertChatId: () => 999,
-      sendAlert: async () => {
-        sent = true;
-        return "sent";
-      },
-      requestId: "heartbeat-test",
-      trigger: "timer",
-      shouldSuppressCheckin: () => true,
-    });
-
-    expect(result.status).toBe("alert_sent");
-    expect(sent).toBe(true);
-  });
-
-  test("does not suppress manual check-in during quiet hours", async () => {
-    let sent = false;
-    const result = await runHeartbeatCycle({
-      logger: new StubLogger(),
-      runHeartbeatPrompt: async () =>
-        JSON.stringify({
-          action: "checkin",
-          issue: "Idle oltre soglia",
-          impact: "Rischio di perdere un follow-up",
-          nextStep: "Invia check-in breve",
-          todoItems: [],
-        }),
-      getAlertChatId: () => 999,
-      sendAlert: async () => {
-        sent = true;
-        return "sent";
-      },
-      requestId: "heartbeat-test",
-      trigger: "manual",
-      shouldSuppressCheckin: () => true,
-    });
-
-    expect(result.status).toBe("checkin_sent");
-    expect(sent).toBe(true);
+    expect(result.status).toBe("completed");
+    expect(result.requestId).toBe("test-789");
   });
 });

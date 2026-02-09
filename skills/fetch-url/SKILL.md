@@ -22,8 +22,7 @@ bash /data/.codex/skills/fetch-url/scripts/fetch-url.sh "<url>"
   - metadata path (status code + timestamp)
 - Summarize from the generated `.txt` file.
 - If user asks Telegram delivery, send file via RPC:
-  - Docker: `bun run /app/src/cli/ambrogioctl.ts telegram send-document --path "<path>" --json`
-  - Local dev: `bun run /data/../src/cli/ambrogioctl.ts telegram send-document --path "<path>" --json`
+  - `ambrogioctl telegram send-document --path "<path>" --json`
 
 ## Guardrails
 

@@ -35,6 +35,10 @@ RUN bun install --frozen-lockfile
 COPY src ./src
 COPY skills ./skills
 
+# Create ambrogioctl wrapper script in PATH
+RUN echo '#!/bin/bash\nexec bun run /app/src/cli/ambrogioctl.ts "$@"' > /usr/local/bin/ambrogioctl \
+  && chmod +x /usr/local/bin/ambrogioctl
+
 RUN groupadd --system ambrogio-agent && useradd --system --gid ambrogio-agent --create-home ambrogio-agent
 USER ambrogio-agent
 

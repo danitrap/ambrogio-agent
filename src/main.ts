@@ -32,7 +32,6 @@ const MAX_TELEGRAM_DOCUMENT_BYTES = 49_000_000;
 const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
 const GENERATED_SCANNED_PDFS_RELATIVE_DIR = "generated/scanned-pdfs";
 const MAX_RECENT_TELEGRAM_MESSAGES = 50;
-const HEARTBEAT_ALERT_DEDUP_WINDOW_MS = 4 * 60 * 60 * 1000;
 const DELAYED_TASK_POLL_INTERVAL_MS = 10_000;
 type PendingBackgroundTask = ReturnType<StateStore["getPendingBackgroundTasks"]>[number];
 type ScheduledTask = ReturnType<StateStore["getDueScheduledTasks"]>[number];
@@ -564,18 +563,6 @@ async function main(): Promise<void> {
     logger,
     stateStore,
     runHeartbeatPromptWithTimeout,
-    getAlertChatId: () => config.telegramAllowedUserId,
-    fallbackAlertChatId: config.telegramAllowedUserId,
-    sendAlertMessage: async (chatId, message) => {
-      await sendTelegramFormattedMessage({
-        telegram,
-        chatId,
-        text: message,
-      });
-    },
-    recordRecentTelegramEntry,
-    previewText,
-    dedupWindowMs: HEARTBEAT_ALERT_DEDUP_WINDOW_MS,
     quietHours,
   });
   heartbeatStateResolver = heartbeatRunner.getHeartbeatState;
@@ -588,6 +575,15 @@ async function main(): Promise<void> {
       return retryTaskDelivery(taskId);
     },
     getStatus: getRuntimeStatus,
+    telegram: {
+      getAuthorizedChatId: () => config.telegramAllowedUserId,
+      sendMessage: async (chatId, text) => {
+        await telegram.sendMessage(chatId, text);
+      },
+      recordMessage: async (role, summary) => {
+        await recordRecentTelegramEntry(role, summary);
+      },
+    },
     media: {
       dataRootRealPath,
       getAuthorizedChatId: () => config.telegramAllowedUserId,
@@ -923,19 +919,14 @@ async function main(): Promise<void> {
             if (outcome.status === "skipped_inflight") {
               return "Heartbeat gia in esecuzione.";
             }
-            if (outcome.status === "ok") {
-              return "Heartbeat completato: HEARTBEAT_OK (nessun alert).";
+            if (outcome.status === "completed") {
+              return "Heartbeat completato. La skill ha gestito autonomamente eventuali notifiche.";
             }
-            if (outcome.status === "checkin_sent") {
-              return "Heartbeat completato: check-in inviato su Telegram.";
+            if (outcome.status === "error") {
+              return "Heartbeat fallito con errore. Controlla i log per dettagli.";
             }
-            if (outcome.status === "alert_sent") {
-              return "Heartbeat completato: alert inviato su Telegram.";
-            }
-            if (outcome.status === "checkin_dropped") {
-              return "Heartbeat completato: check-in necessario ma nessuna chat autorizzata disponibile.";
-            }
-            return "Heartbeat completato: alert necessario ma nessuna chat autorizzata disponibile.";
+            // skipped_quiet_hours non dovrebbe accadere con trigger "manual"
+            return "Heartbeat skipped durante quiet hours.";
           },
 
         });

@@ -29,13 +29,7 @@ bash /data/.codex/skills/fake-scanned-pdf/scripts/fakescanner.sh "<input.pdf>"
 - If user asks Telegram delivery, send via local RPC:
 
 ```bash
-bun run /app/src/cli/ambrogioctl.ts telegram send-document --path "<output.pdf>" --json
-```
-
-Local dev fallback:
-
-```bash
-bun run /data/../src/cli/ambrogioctl.ts telegram send-document --path "<output.pdf>" --json
+ambrogioctl telegram send-document --path "<output.pdf>" --json
 ```
 
 ## Guardrails

@@ -18,8 +18,7 @@ When Telegram audio delivery is requested:
 
 1. Generate/save an audio file under `/data/...` (for example `/data/generated/audio/...mp3`).
 2. Send it via local RPC:
-   - Docker: `bun run /app/src/cli/ambrogioctl.ts telegram send-audio --path "<audio-path>" --json`
-   - Local dev: `bun run /data/../src/cli/ambrogioctl.ts telegram send-audio --path "<audio-path>" --json`
+   - `ambrogioctl telegram send-audio --path "<audio-path>" --json`
 3. Reply to the user with a concise confirmation.
 
 > **Setup:** See [Installation Guide](references/installation.md). For JavaScript, use `@elevenlabs/*` packages only.

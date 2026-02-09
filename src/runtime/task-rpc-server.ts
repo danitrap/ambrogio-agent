@@ -32,6 +32,11 @@ type TaskRpcServerOptions = {
   stateStore: StateStore;
   retryTaskDelivery: (taskId: string) => Promise<string>;
   getStatus?: () => Promise<Record<string, unknown>>;
+  telegram?: {
+    getAuthorizedChatId: () => number | null;
+    sendMessage: (chatId: number, text: string) => Promise<void>;
+    recordMessage: (role: "assistant" | "user", summary: string) => Promise<void>;
+  };
   media?: {
     dataRootRealPath: string;
     getAuthorizedChatId: () => number | null;
@@ -232,6 +237,34 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
     }
     const status = await options.getStatus();
     return rpcOk(status);
+  }
+
+  if (op === "telegram.sendMessage") {
+    const telegram = options.telegram;
+    if (!telegram) {
+      return rpcError("BAD_REQUEST", "Telegram operations are not available.");
+    }
+    const text = readString(args.text);
+    if (!text) {
+      return rpcError("BAD_REQUEST", "text is required and must not be empty.");
+    }
+    if (text.length > 4000) {
+      return rpcError("PAYLOAD_TOO_LARGE", `text exceeds 4000 characters (got ${text.length})`);
+    }
+    const chatId = telegram.getAuthorizedChatId();
+    if (chatId === null) {
+      return rpcError("NOT_FOUND", "No authorized chat configured.");
+    }
+    try {
+      await telegram.sendMessage(chatId, text);
+      // Register message in recent conversations
+      const preview = text.length > 120 ? `${text.slice(0, 117)}...` : text;
+      await telegram.recordMessage("assistant", `text: ${preview}`);
+      return rpcOk({ sent: true, chatId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return rpcError("INTERNAL", `Failed to send telegram message: ${message}`);
+    }
   }
 
   if (op === "telegram.sendPhoto" || op === "telegram.sendAudio" || op === "telegram.sendDocument") {
