@@ -9,6 +9,7 @@ export type HeartbeatStatus =
   | "checkin_dropped"
   | "alert_sent"
   | "alert_dropped"
+  | "skipped_quiet_hours"
   | "skipped_inflight";
 
 type LoggerLike = {
@@ -26,6 +27,7 @@ export function createHeartbeatRunner(params: {
   };
   runHeartbeatPromptWithTimeout: (prompt: string, requestId: string) => Promise<string>;
   getAlertChatId: () => number | null;
+  fallbackAlertChatId?: number | null;
   sendAlertMessage: (chatId: number, message: string) => Promise<void>;
   recordRecentTelegramEntry: (role: "assistant" | "user", summary: string, atMs?: number) => Promise<void>;
   previewText: (value: string, max?: number) => string;
@@ -61,11 +63,23 @@ export function createHeartbeatRunner(params: {
     const requestId = `heartbeat-${Date.now()}`;
 
     try {
+      if (trigger === "timer" && isInQuietHours(params.quietHours)) {
+        heartbeatLastResult = "skipped_quiet_hours";
+        params.stateStore.setRuntimeValue("heartbeat_last_result", heartbeatLastResult);
+        params.logger.debug("state_store_runtime_value_written", {
+          key: "heartbeat_last_result",
+          value: heartbeatLastResult,
+        });
+        params.logger.info("heartbeat_skipped_quiet_hours", { trigger, requestId });
+        params.logger.info("heartbeat_finished", { trigger, requestId, status: heartbeatLastResult });
+        return { status: heartbeatLastResult, requestId };
+      }
+
       const cycleResult = await runHeartbeatCycle({
         logger: params.logger,
         runHeartbeatPrompt: async ({ prompt, requestId: cycleRequestId }) =>
           params.runHeartbeatPromptWithTimeout(prompt, cycleRequestId),
-        getAlertChatId: params.getAlertChatId,
+        getAlertChatId: () => params.getAlertChatId() ?? params.fallbackAlertChatId ?? null,
         sendAlert: async (chatId, message) => {
           const fingerprint = createHash("sha1").update(message.trim()).digest("hex");
           const nowMs = Date.now();

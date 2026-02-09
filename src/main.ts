@@ -270,8 +270,6 @@ async function main(): Promise<void> {
   const startedAtMs = Date.now();
   let handledMessages = 0;
   let failedMessages = 0;
-  let lastAuthorizedChatId: number | null = null;
-  let lastAuthorizedUserId: number | null = null;
   let lastTelegramMessageAtMs: number | null = null;
   let lastTelegramMessageSummary = "n/a";
   const recentTelegramMessages = stateStore
@@ -525,11 +523,10 @@ async function main(): Promise<void> {
     const recentMessages = recentTelegramMessages.length === 0
       ? ["none"]
       : recentTelegramMessages.slice(-5);
-    const conversationContext = lastAuthorizedUserId === null
-      ? ["none"]
-      : stateStore
-        .getConversation(lastAuthorizedUserId, 8)
-        .map((entry) => `${entry.role}: ${entry.text}`);
+    const conversationContextEntries = stateStore
+      .getConversation(config.telegramAllowedUserId, 8)
+      .map((entry) => `${entry.role}: ${entry.text}`);
+    const conversationContext = conversationContextEntries.length > 0 ? conversationContextEntries : ["none"];
     const todoPath = path.join(config.dataRoot, "TODO.md");
     const todoOpenItems = await readTodoSnapshot();
 
@@ -567,7 +564,8 @@ async function main(): Promise<void> {
     logger,
     stateStore,
     runHeartbeatPromptWithTimeout,
-    getAlertChatId: () => lastAuthorizedChatId,
+    getAlertChatId: () => config.telegramAllowedUserId,
+    fallbackAlertChatId: config.telegramAllowedUserId,
     sendAlertMessage: async (chatId, message) => {
       await sendTelegramFormattedMessage({
         telegram,
@@ -592,7 +590,7 @@ async function main(): Promise<void> {
     getStatus: getRuntimeStatus,
     media: {
       dataRootRealPath,
-      getAuthorizedChatId: () => lastAuthorizedChatId,
+      getAuthorizedChatId: () => config.telegramAllowedUserId,
       maxPhotoBytes: MAX_TELEGRAM_PHOTO_BYTES,
       maxAudioBytes: MAX_TELEGRAM_AUDIO_BYTES,
       maxDocumentBytes: MAX_TELEGRAM_DOCUMENT_BYTES,
@@ -627,10 +625,6 @@ async function main(): Promise<void> {
       offset = nextOffset;
     },
     processUpdate: async (update) => {
-        if (allowlist.isAllowed(update.userId)) {
-          lastAuthorizedChatId = update.chatId;
-          lastAuthorizedUserId = update.userId;
-        }
         lastTelegramMessageAtMs = Date.now();
         if (update.text) {
           lastTelegramMessageSummary = `text: ${previewText(update.text, 120)}`;
