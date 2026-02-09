@@ -31,7 +31,7 @@ const MAX_TELEGRAM_AUDIO_BYTES = 49_000_000;
 const MAX_TELEGRAM_DOCUMENT_BYTES = 49_000_000;
 const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
 const GENERATED_SCANNED_PDFS_RELATIVE_DIR = "generated/scanned-pdfs";
-const MAX_RECENT_TELEGRAM_MESSAGES = 50;
+const MAX_RECENT_TELEGRAM_MESSAGES = 1000;
 const DELAYED_TASK_POLL_INTERVAL_MS = 10_000;
 type PendingBackgroundTask = ReturnType<StateStore["getPendingBackgroundTasks"]>[number];
 type ScheduledTask = ReturnType<StateStore["getDueScheduledTasks"]>[number];
@@ -860,7 +860,6 @@ async function main(): Promise<void> {
                 "heartbeat_last_alert_fingerprint",
                 "heartbeat_last_alert_at",
               ]);
-              stateStore.clearBackgroundTasks();
               logger.debug("state_store_runtime_values_cleared", {
                 keys: [
                   "heartbeat_last_run_at",
@@ -869,7 +868,6 @@ async function main(): Promise<void> {
                   "heartbeat_last_alert_at",
                 ],
               });
-              logger.debug("state_store_background_tasks_cleared");
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               logger.warn("telegram_history_clear_failed", { message });

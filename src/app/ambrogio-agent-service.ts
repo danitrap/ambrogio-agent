@@ -28,7 +28,7 @@ export class AmbrogioAgentService {
     }
 
     const history = this.deps.conversationStore
-      ? this.deps.conversationStore.getConversation(userId, 12)
+      ? this.deps.conversationStore.getConversation(userId, 100)
       : this.historyByUser.get(userId) ?? [];
     if (this.deps.conversationStore) {
       this.deps.logger.debug("state_store_conversation_loaded", {
@@ -46,8 +46,8 @@ export class AmbrogioAgentService {
     const responseText = modelResponse.text || "Done.";
 
     if (this.deps.conversationStore) {
-      this.deps.conversationStore.appendConversationTurn(userId, "user", text, 12);
-      this.deps.conversationStore.appendConversationTurn(userId, "assistant", responseText, 12);
+      this.deps.conversationStore.appendConversationTurn(userId, "user", text, 100);
+      this.deps.conversationStore.appendConversationTurn(userId, "assistant", responseText, 100);
       this.deps.logger.debug("state_store_conversation_written", {
         userId,
         writtenTurns: 2,
@@ -62,7 +62,7 @@ export class AmbrogioAgentService {
   private pushHistory(userId: number, role: "user" | "assistant", text: string): void {
     const history = this.historyByUser.get(userId) ?? [];
     history.push({ role, text });
-    const maxEntries = 12;
+    const maxEntries = 100;
     if (history.length > maxEntries) {
       history.splice(0, history.length - maxEntries);
     }
