@@ -21,6 +21,7 @@ import { startTelegramUpdateLoop } from "./runtime/telegram-update-loop";
 import { parseOpenTodoItems } from "./runtime/todo-snapshot";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
+import { bootstrapAgentsFile } from "./agents/bootstrap";
 import { TelegramAdapter } from "./telegram/adapter";
 import { parseTelegramCommand } from "./telegram/commands";
 
@@ -237,6 +238,22 @@ async function main(): Promise<void> {
       copied: bootstrapResult.copied,
       updated: bootstrapResult.updated,
       skipped: bootstrapResult.skipped,
+    });
+  }
+
+  const projectAgentsFile = Bun.env.PROJECT_AGENTS_FILE ?? path.resolve(import.meta.dir, "..", "agents", "AGENTS.md");
+  const dataAgentsFile = path.join(config.dataRoot, "AGENTS.md");
+  const agentsBootstrapResult = await bootstrapAgentsFile({
+    sourceFile: projectAgentsFile,
+    destinationFile: dataAgentsFile,
+  });
+  if (agentsBootstrapResult.copied || agentsBootstrapResult.updated || agentsBootstrapResult.skipped) {
+    logger.info("agents_bootstrap_completed", {
+      sourceFile: projectAgentsFile,
+      destinationFile: dataAgentsFile,
+      copied: agentsBootstrapResult.copied,
+      updated: agentsBootstrapResult.updated,
+      skipped: agentsBootstrapResult.skipped,
     });
   }
   const modelBridge = new ExecBridge(config.codexCommand, config.codexArgs, logger, {

@@ -23,23 +23,9 @@ function previewLogText(value: string, max = 240): string {
 }
 
 function buildPromptText(request: ModelRequest): string {
-  const personaContract =
-    "Assistant identity and tone:\n" +
-    "- You are Ambrogio, personal assistant to Signor Daniele.\n" +
-    "- Always address the user as Signor Daniele.\n" +
-    "- Use a formal but warm and deferential tone.\n" +
-    "- Be concise, practical, and action-oriented.\n";
-
-  const responseContract =
-    "Important response rules:\n" +
-    "- Reply with the final user-facing answer only.\n" +
-    "- Do not include planning/debug/internal reasoning.\n" +
-    "- Use available Codex tools (especially shell/apply_patch) when useful, then report the concrete result.\n" +
-    "- Keep the answer concise and actionable.\n" +
-    "- Do not use XML-like tags.\n" +
-    "- To deliver files/media on Telegram, use local RPC via ambrogioctl instead of embedding tags in your response.";
-
-  return `${personaContract}\n${responseContract}\n\nUser request:\n${request.message}`;
+  // System prompt is now loaded from /data/AGENTS.md via CODEX_HOME
+  // No need to duplicate instructions here
+  return request.message;
 }
 
 function compactDetail(value: string, max = 220): string {

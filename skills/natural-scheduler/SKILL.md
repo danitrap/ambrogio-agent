@@ -27,6 +27,7 @@ The Ambrogio runtime manages three types of background jobs:
 - Always execute task operations through `ambrogioctl`.
 - If request is ambiguous between runtime task and TODO, ask explicit confirmation before executing.
 - Always append `--json` to ambrogioctl commands and parse results before replying.
+- **CRITICAL**: When creating delayed or recurring tasks, transform the user request into a delivery-ready prompt that does NOT look like a new request. See "Prompt Transformation Rules" below.
 
 ## Supported Intents
 
@@ -57,6 +58,45 @@ The Ambrogio runtime manages three types of background jobs:
   - `ambrogioctl jobs update-recurrence --id <taskId> --expression <expr> --json`
 - Cancel recurring job (permanently):
   - `ambrogioctl tasks cancel --id <taskId> --json` (uses tasks.cancel RPC, works for all job types)
+
+## Prompt Transformation Rules
+
+When creating delayed or recurring tasks, the `--prompt` parameter will be executed later by Ambrogio and sent to the user. **You MUST transform the user's request into a delivery-ready message that does NOT look like a new request.**
+
+### ❌ WRONG Examples (will cause infinite loops):
+- User: "Ricordami di cucinare il riso"
+- **BAD prompt**: `"Ricorda a Signor Daniele di cucinare il riso"` ← This looks like a NEW request!
+- Result: When executed, Ambrogio will ask "a che ora?" instead of delivering the reminder
+
+### ✅ CORRECT Examples:
+
+1. **Simple reminder (Italian):**
+   - User: "Ricordami di cucinare il riso alle 12:40"
+   - **Good prompt**: `"Promemoria: è ora di cucinare il riso."`
+   - Or: `"Signor Daniele, è ora di cucinare il riso."`
+
+2. **Reminder with details:**
+   - User: "Ricordami di comprare il latte domani"
+   - **Good prompt**: `"Promemoria: comprare il latte."`
+
+3. **Recurring task (English):**
+   - User: "Tell me if it will rain in Milan, every day at 6am"
+   - **Good prompt**: `"Check weather forecast for Milan and tell me if it will rain today"`
+
+4. **Reminder with recipe/instructions:**
+   - User: "Ricordami di cucinare la pasta con ricetta alle 19:40"
+   - **Good prompt**: `"Promemoria: cucinare la pasta. Ricetta: [insert recipe here]"`
+
+### Transformation Pattern:
+
+```
+"Ricordami di X" → "Promemoria: X." or "È ora di X."
+"Remind me to X" → "Reminder: X." or "Time to X."
+"Dimmi X" → "X" (already imperative, keep as-is)
+"Tell me X" → "X" (already imperative, keep as-is)
+```
+
+**Key principle**: The prompt should be what you want to SAY to the user when the task runs, NOT a description of what to remember.
 
 ## Time Handling
 
@@ -101,14 +141,33 @@ When user provides natural language, map to recurrence expressions:
 
 ## Example Interactions
 
-### Example 1: Daily Weather Check
+### Example 1: Simple Reminder (One-Shot)
+
+**User:** "Ricordami di cucinare il riso alle 12:40"
+
+**Agent Response:**
+1. Parse time: "12:40" → ISO timestamp for today at 12:40
+2. Transform prompt: "Ricordami di cucinare il riso" → "Promemoria: è ora di cucinare il riso."
+3. Create task:
+   ```bash
+   ambrogioctl tasks create \
+     --run-at "2026-02-10T12:40:00+01:00" \
+     --prompt "Promemoria: è ora di cucinare il riso." \
+     --user-id 450717824 \
+     --chat-id 450717824 \
+     --json
+   ```
+4. Reply: "Signor Daniele, promemoria impostato per oggi alle 12:40. ID: `dl-rpc-xyz`."
+
+### Example 2: Daily Weather Check (Recurring)
 
 **User:** "Dimmi se pioverà a Milano, ogni giorno alle 6 di mattina"
 
 **Agent Response:**
 1. Parse: "ogni giorno alle 6" → cron `"0 6 * * *"`
 2. Calculate first run: tomorrow at 6:00 AM (or today if before 6am)
-3. Create job:
+3. Prompt is already imperative: "Dimmi se pioverà" → keep as task instruction
+4. Create job:
    ```bash
    ambrogioctl jobs create-recurring \
      --run-at "2026-02-11T06:00:00.000Z" \
@@ -119,16 +178,17 @@ When user provides natural language, map to recurrence expressions:
      --expression "0 6 * * *" \
      --json
    ```
-4. Reply: "Ok! Ti dirò se pioverà a Milano ogni giorno alle 6:00. (Job ID: rc-xyz)"
+5. Reply: "Ok! Ti dirò se pioverà a Milano ogni giorno alle 6:00. (Job ID: rc-xyz)"
 
-### Example 2: Hourly Disk Space Check
+### Example 3: Hourly Disk Space Check (Recurring)
 
 **User:** "Check disk space every hour"
 
 **Agent Response:**
 1. Parse: "every hour" → interval `"1h"`
 2. Calculate first run: current time + 1 hour
-3. Create job:
+3. Prompt is already imperative, keep as-is
+4. Create job:
    ```bash
    ambrogioctl jobs create-recurring \
      --run-at "2026-02-10T16:00:00.000Z" \
@@ -139,9 +199,9 @@ When user provides natural language, map to recurrence expressions:
      --expression "1h" \
      --json
    ```
-4. Reply: "Ok! I'll check disk space every hour. (Job ID: rc-xyz)"
+5. Reply: "Ok! I'll check disk space every hour. (Job ID: rc-xyz)"
 
-### Example 3: Pause/Resume
+### Example 4: Pause/Resume
 
 **User:** "Pause the weather job"
 
