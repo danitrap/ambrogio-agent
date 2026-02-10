@@ -402,13 +402,32 @@ async function main(): Promise<void> {
       return;
     }
     const prompt = task.payloadPrompt ?? task.requestPreview;
+    const isRecurring = task.kind === "recurring";
+
     try {
       const reply = await ambrogioAgent.handleMessage(task.userId, prompt, `delayed-${task.taskId}`);
-      const marked = stateStore.markBackgroundTaskCompleted(task.taskId, reply);
-      if (!marked) {
-        logger.info("scheduled_task_result_dropped", { taskId: task.taskId, reason: "status_changed" });
-        return;
+
+      if (isRecurring) {
+        // For recurring jobs: reschedule before delivery
+        const rescheduled = stateStore.rescheduleRecurringJob(task.taskId, reply);
+        if (!rescheduled) {
+          // Max runs reached or disabled - mark as completed
+          const marked = stateStore.markBackgroundTaskCompleted(task.taskId, reply);
+          if (!marked) {
+            logger.info("recurring_task_completion_dropped", { taskId: task.taskId, reason: "status_changed" });
+            return;
+          }
+        }
+      } else {
+        // One-shot job: mark completed
+        const marked = stateStore.markBackgroundTaskCompleted(task.taskId, reply);
+        if (!marked) {
+          logger.info("scheduled_task_result_dropped", { taskId: task.taskId, reason: "status_changed" });
+          return;
+        }
       }
+
+      // Always deliver results
       const refreshed = stateStore.getBackgroundTask(task.taskId);
       if (!refreshed) {
         return;
@@ -417,11 +436,26 @@ async function main(): Promise<void> {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const failureReply = `Task schedulato fallito (${task.taskId}): ${message}`;
-      const marked = stateStore.markBackgroundTaskFailed(task.taskId, message, failureReply);
-      if (!marked) {
-        logger.info("scheduled_task_failure_dropped", { taskId: task.taskId, reason: "status_changed" });
-        return;
+
+      if (isRecurring) {
+        // Log error but keep recurring (increment run count)
+        const rescheduled = stateStore.recordRecurringJobFailure(task.taskId, message, failureReply);
+        if (!rescheduled) {
+          // Max runs reached - mark as failed
+          const marked = stateStore.markBackgroundTaskFailed(task.taskId, message, failureReply);
+          if (!marked) {
+            logger.info("recurring_task_failure_dropped", { taskId: task.taskId, reason: "status_changed" });
+            return;
+          }
+        }
+      } else {
+        const marked = stateStore.markBackgroundTaskFailed(task.taskId, message, failureReply);
+        if (!marked) {
+          logger.info("scheduled_task_failure_dropped", { taskId: task.taskId, reason: "status_changed" });
+          return;
+        }
       }
+
       const refreshed = stateStore.getBackgroundTask(task.taskId);
       if (!refreshed) {
         return;

@@ -231,6 +231,146 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
     return rpcOk({ taskId, message });
   }
 
+  // Recurring jobs operations
+  if (op === "jobs.create-recurring") {
+    const runAtIso = readString(args.runAtIso);
+    const prompt = readString(args.prompt);
+    const userId = readNumber(args.userId);
+    const chatId = readNumber(args.chatId);
+    const recurrenceType = readString(args.recurrenceType);
+    const recurrenceExpression = readString(args.recurrenceExpression);
+
+    if (!runAtIso || !prompt || userId === null || chatId === null || !recurrenceType || !recurrenceExpression) {
+      return rpcError("BAD_REQUEST", "runAtIso, prompt, userId, chatId, recurrenceType, recurrenceExpression are required.");
+    }
+
+    if (recurrenceType !== "interval" && recurrenceType !== "cron") {
+      return rpcError("BAD_REQUEST", "recurrenceType must be 'interval' or 'cron'.");
+    }
+
+    const runAtMs = Date.parse(runAtIso);
+    if (Number.isNaN(runAtMs) || runAtMs <= Date.now()) {
+      return rpcError("INVALID_TIME", "runAtIso must be a future ISO timestamp.");
+    }
+
+    const maxRuns = readNumber(args.maxRuns) ?? undefined;
+
+    const taskId = `rc-rpc-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+    const requestPreview = readString(args.requestPreview) ?? prompt;
+
+    options.stateStore.createRecurringJob({
+      taskId,
+      updateId: 0,
+      userId,
+      chatId,
+      command: "rpc_create_recurring",
+      prompt,
+      requestPreview,
+      runAt: runAtIso,
+      recurrenceType: recurrenceType as "interval" | "cron",
+      recurrenceExpression,
+      maxRuns,
+    });
+
+    return rpcOk({
+      taskId,
+      kind: "recurring",
+      status: "scheduled",
+      runAtIso: new Date(runAtMs).toISOString(),
+      recurrenceType,
+      recurrenceExpression,
+    });
+  }
+
+  if (op === "jobs.pause") {
+    const taskId = readString(args.taskId);
+    if (!taskId) {
+      return rpcError("BAD_REQUEST", "taskId is required.");
+    }
+
+    const task = options.stateStore.getBackgroundTask(taskId);
+    if (!task) {
+      return rpcError("NOT_FOUND", `Job non trovato: ${taskId}`);
+    }
+    if (task.kind !== "recurring") {
+      return rpcError("INVALID_STATE", `Job ${taskId} non è recurring (kind: ${task.kind}).`);
+    }
+
+    const success = options.stateStore.pauseRecurringJob(taskId);
+    if (!success) {
+      return rpcError("INTERNAL", `Failed to pause job ${taskId}.`);
+    }
+
+    return rpcOk({ status: "paused", taskId });
+  }
+
+  if (op === "jobs.resume") {
+    const taskId = readString(args.taskId);
+    if (!taskId) {
+      return rpcError("BAD_REQUEST", "taskId is required.");
+    }
+
+    const task = options.stateStore.getBackgroundTask(taskId);
+    if (!task) {
+      return rpcError("NOT_FOUND", `Job non trovato: ${taskId}`);
+    }
+    if (task.kind !== "recurring") {
+      return rpcError("INVALID_STATE", `Job ${taskId} non è recurring (kind: ${task.kind}).`);
+    }
+
+    const success = options.stateStore.resumeRecurringJob(taskId);
+    if (!success) {
+      return rpcError("INTERNAL", `Failed to resume job ${taskId}.`);
+    }
+
+    return rpcOk({ status: "resumed", taskId });
+  }
+
+  if (op === "jobs.list-recurring") {
+    const limitRaw = readNumber(args.limit);
+    const limit = limitRaw && limitRaw > 0 ? Math.floor(limitRaw) : 20;
+    const recurringJobs = options.stateStore.getRecurringJobs(limit);
+
+    const jobs = recurringJobs.map((job) => ({
+      taskId: job.taskId,
+      status: job.status,
+      recurrenceType: job.recurrenceType,
+      recurrenceExpression: job.recurrenceExpression,
+      recurrenceRunCount: job.recurrenceRunCount,
+      recurrenceMaxRuns: job.recurrenceMaxRuns,
+      recurrenceEnabled: job.recurrenceEnabled,
+      nextRunAt: job.runAt,
+      createdAt: job.createdAt,
+      requestPreview: job.requestPreview,
+    }));
+
+    return rpcOk({ jobs });
+  }
+
+  if (op === "jobs.update-recurrence") {
+    const taskId = readString(args.taskId);
+    const expression = readString(args.expression);
+
+    if (!taskId || !expression) {
+      return rpcError("BAD_REQUEST", "taskId and expression are required.");
+    }
+
+    const task = options.stateStore.getBackgroundTask(taskId);
+    if (!task) {
+      return rpcError("NOT_FOUND", `Job non trovato: ${taskId}`);
+    }
+    if (task.kind !== "recurring") {
+      return rpcError("INVALID_STATE", `Job ${taskId} non è recurring (kind: ${task.kind}).`);
+    }
+
+    const success = options.stateStore.updateRecurrenceExpression(taskId, expression);
+    if (!success) {
+      return rpcError("INTERNAL", `Failed to update recurrence expression for job ${taskId}.`);
+    }
+
+    return rpcOk({ taskId, expression });
+  }
+
   if (op === "status.get") {
     if (!options.getStatus) {
       return rpcError("BAD_REQUEST", "Status not available.");

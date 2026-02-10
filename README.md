@@ -13,10 +13,13 @@ Personal-only ambrogio-agent wrapper for Telegram with a secure `/data` boundary
 - Docker hardening baseline (`read_only`, `cap_drop=ALL`, `no-new-privileges`)
 - Backend-tools-only mode via `codex exec` (no local fallback execution).
 - Minimal heartbeat loop every 30 minutes with `HEARTBEAT_OK` silent mode, explicit `checkin|alert` actions, and Telegram delivery with dedup.
-- Soft-timeout for long requests (60s): user gets immediate "background task" feedback while Codex continues.
-- Background task lifecycle persisted in SQLite with delivery retry.
-- Delayed tasks in natural language (for example, "fra 5 minuti ..."), executed by an internal scheduler.
-- Natural-language runtime task management (`list`, `inspect`, `retry`, `cancel`) with explicit confirmation on ambiguity.
+- Soft-timeout for long requests (60s): user gets immediate "background job" feedback while Codex continues.
+- Background job lifecycle persisted in SQLite with delivery retry.
+- Three background job types:
+  - **Immediate jobs** (kind='background'): Long-running requests that timed out
+  - **One-shot jobs** (kind='delayed'): Future execution at a specific time (e.g., "fra 5 minuti...")
+  - **Recurring jobs** (kind='recurring'): Repeating scheduled execution (e.g., "ogni giorno alle 6")
+- Natural-language job management (`list`, `inspect`, `retry`, `cancel`, `pause`, `resume`) with explicit confirmation on ambiguity.
 
 ## Local run
 
@@ -75,7 +78,7 @@ The ambrogio-agent runs a dedicated heartbeat every 30 minutes (fixed interval, 
 - Reads optional `/data/HEARTBEAT.md` instructions.
 - Runs a lightweight model check with a runtime status block.
 - Runtime status includes local timezone/date-time, heartbeat last state, idle duration, recent Telegram messages, conversation context (last 8 turns), TODO path, and TODO open-item snapshot (max 10).
-- Runtime status includes task metrics: pending background deliveries and scheduled delayed tasks.
+- Runtime status includes job metrics: pending background deliveries, scheduled one-shot jobs, and active recurring jobs.
 - If the model replies exactly `HEARTBEAT_OK`, nothing is sent (unless `HEARTBEAT.md` explicitly asks for an always-on notice message).
 - If action is needed, expected output is JSON:
   - `{"action":"checkin|alert","issue":"...","impact":"...","nextStep":"...","todoItems":["..."]}`
@@ -88,41 +91,70 @@ The ambrogio-agent runs a dedicated heartbeat every 30 minutes (fixed interval, 
 - `/status` reports heartbeat interval/running/last run/last result plus idle and latest Telegram summary.
 - `/clear` resets conversation state, heartbeat runtime keys (including dedup keys), and task state.
 
-## Task Management
+## Job Management
 
 Long operations automatically move to background after 60s timeout without killing Codex execution.
 
-- Telegram immediately receives a message with `Task ID`.
+- Telegram immediately receives a message with `Job ID`.
 - When the job finishes, the result is delivered automatically.
 - If delivery fails, it is retried on the next heartbeat cycle.
 
-Use natural language for task operations:
+### Job Types
 
+1. **Immediate jobs** (kind='background'): Chat requests that took too long
+2. **One-shot jobs** (kind='delayed'): Execute once at a specific future time
+3. **Recurring jobs** (kind='recurring'): Execute repeatedly on a schedule
+
+### Natural Language Operations
+
+**One-shot and immediate jobs:**
 - "Mostra i task attivi"
 - "Dammi i dettagli del task dl-..."
 - "Ritenta il task dl-..."
 - "Cancella il task precedente"
 - "Tra 5 minuti mandami i top post di Hacker News"
 
-When runtime tasks and TODO intents are ambiguous, the ambrogio-agent asks explicit confirmation before executing.
+**Recurring jobs:**
+- "Dimmi se pioverà a Milano, ogni giorno alle 6 di mattina"
+- "Check disk space every hour"
+- "Mostra i job ricorrenti"
+- "Metti in pausa il job rc-..."
+- "Riprendi il job rc-..."
+- "Cancella il job weather"
+
+When runtime jobs and TODO intents are ambiguous, the ambrogio-agent asks explicit confirmation before executing.
 
 Legacy commands (`/tasks`, `/task <id>`, `/retrytask <id>`, `/canceltask <id>`) remain available for debugging.
 
-### Local Task RPC (for skills/tools)
+### Local Job RPC (for skills/tools)
 
-Ambrogio exposes a local Unix-socket task RPC server:
+Ambrogio exposes a local Unix-socket job RPC server:
 
 - Socket path: `/tmp/ambrogio-agent.sock` (override with `AMBROGIO_SOCKET_PATH`)
 - Protocol: one-line JSON request/response envelopes (`ok/result` or `ok=false/error`)
 
 CLI client:
 
+**One-shot and immediate jobs (tasks scope):**
 ```bash
 bun run ctl -- tasks list --json
 bun run ctl -- tasks inspect --id <task-id> --json
 bun run ctl -- tasks create --run-at 2099-01-01T10:00:00.000Z --prompt "..." --user-id 123 --chat-id 123 --json
 bun run ctl -- tasks cancel --id <task-id> --json
 bun run ctl -- tasks retry --id <task-id> --json
+```
+
+**Recurring jobs (jobs scope):**
+```bash
+bun run ctl -- jobs create-recurring --run-at 2099-01-01T10:00:00.000Z --prompt "..." --user-id 123 --chat-id 123 --type interval --expression "1h" --json
+bun run ctl -- jobs list-recurring --json
+bun run ctl -- jobs pause --id <job-id> --json
+bun run ctl -- jobs resume --id <job-id> --json
+bun run ctl -- jobs update-recurrence --id <job-id> --expression "2h" --json
+```
+
+**Telegram media:**
+```bash
 bun run ctl -- telegram send-photo --path /data/path/to/image.png --json
 bun run ctl -- telegram send-audio --path /data/path/to/audio.mp3 --json
 bun run ctl -- telegram send-document --path /data/path/to/file.pdf --json
