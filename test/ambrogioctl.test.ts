@@ -4,12 +4,12 @@ import { runAmbrogioCtl } from "../src/cli/ambrogioctl";
 type RecordedCall = { op: string; args: Record<string, unknown> };
 
 describe("ambrogioctl", () => {
-  test("tasks list emits json when requested", async () => {
+  test("jobs list emits json when requested", async () => {
     const calls: RecordedCall[] = [];
     const out: string[] = [];
     const err: string[] = [];
 
-    const code = await runAmbrogioCtl(["tasks", "list", "--limit", "5", "--json"], {
+    const code = await runAmbrogioCtl(["jobs", "list", "--limit", "5", "--json"], {
       socketPath: "/tmp/ambrogio.sock",
       sendRpc: async (op, args) => {
         calls.push({ op, args });
@@ -20,14 +20,14 @@ describe("ambrogioctl", () => {
     });
 
     expect(code).toBe(0);
-    expect(calls).toEqual([{ op: "tasks.list", args: { limit: 5 } }]);
+    expect(calls).toEqual([{ op: "jobs.list", args: { limit: 5 } }]);
     expect(JSON.parse(out[0] ?? "")).toEqual({ tasks: [{ taskId: "dl-1", status: "scheduled" }] });
-    expect(err).toEqual([]);
+    expect(err).toEqual([]); // No deprecation warning when using jobs scope
   });
 
-  test("tasks inspect requires id", async () => {
+  test("jobs inspect requires id", async () => {
     const err: string[] = [];
-    const code = await runAmbrogioCtl(["tasks", "inspect"], {
+    const code = await runAmbrogioCtl(["jobs", "inspect"], {
       socketPath: "/tmp/ambrogio.sock",
       sendRpc: async () => ({ ok: true, result: {} }),
       stdout: () => {},
@@ -35,20 +35,20 @@ describe("ambrogioctl", () => {
     });
 
     expect(code).toBe(2);
-    expect(err[0]).toContain("--id");
+    expect(err.some(line => line.includes("--id"))).toBe(true);
   });
 
   test("maps rpc not found errors to exit code 3", async () => {
     const err: string[] = [];
-    const code = await runAmbrogioCtl(["tasks", "cancel", "--id", "missing"], {
+    const code = await runAmbrogioCtl(["jobs", "cancel", "--id", "missing"], {
       socketPath: "/tmp/ambrogio.sock",
-      sendRpc: async () => ({ ok: false, error: { code: "NOT_FOUND", message: "Task non trovato" } }),
+      sendRpc: async () => ({ ok: false, error: { code: "NOT_FOUND", message: "Job non trovato" } }),
       stdout: () => {},
       stderr: (line) => err.push(line),
     });
 
     expect(code).toBe(3);
-    expect(err[0]).toContain("Task non trovato");
+    expect(err.some(line => line.includes("Job non trovato"))).toBe(true);
   });
 
   test("status emits json when requested", async () => {
@@ -88,11 +88,11 @@ describe("ambrogioctl", () => {
     expect(out[0]).toContain("handledMessages: 10");
   });
 
-  test("tasks create sends required payload", async () => {
+  test("jobs create sends required payload", async () => {
     const calls: RecordedCall[] = [];
     const code = await runAmbrogioCtl(
       [
-        "tasks",
+        "jobs",
         "create",
         "--run-at",
         "2099-01-01T10:00:00.000Z",
@@ -117,7 +117,7 @@ describe("ambrogioctl", () => {
     expect(code).toBe(0);
     expect(calls).toEqual([
       {
-        op: "tasks.create",
+        op: "jobs.create",
         args: {
           runAtIso: "2099-01-01T10:00:00.000Z",
           prompt: "hello",

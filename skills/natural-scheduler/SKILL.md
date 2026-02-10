@@ -1,6 +1,6 @@
 ---
 name: natural-scheduler
-description: Manage background jobs (immediate, one-shot, and recurring) in natural language by calling ambrogioctl over the local task RPC socket.
+description: Manage background jobs (immediate, one-shot, and recurring) in natural language by calling ambrogioctl over the local job RPC socket.
 ---
 
 # Natural Scheduler
@@ -23,45 +23,45 @@ The Ambrogio runtime manages three types of background jobs:
 ## Hard Rules
 
 - Do not output JSON to the user.
-- Do not invent task IDs.
-- Always execute task operations through `ambrogioctl`.
-- If request is ambiguous between runtime task and TODO, ask explicit confirmation before executing.
+- Do not invent job IDs.
+- Always execute job operations through `ambrogioctl`.
+- If request is ambiguous between runtime job and TODO, ask explicit confirmation before executing.
 - Always append `--json` to ambrogioctl commands and parse results before replying.
-- **CRITICAL**: When creating delayed or recurring tasks, transform the user request into a delivery-ready prompt that does NOT look like a new request. See "Prompt Transformation Rules" below.
+- **CRITICAL**: When creating delayed or recurring jobs, transform the user request into a delivery-ready prompt that does NOT look like a new request. See "Prompt Transformation Rules" below.
 
 ## Supported Intents
 
-### One-Shot and Immediate Jobs (tasks scope)
+### One-Shot and Immediate Jobs
 
-- List tasks:
-  - `ambrogioctl tasks list --json`
-- Inspect task:
-  - `ambrogioctl tasks inspect --id <taskId> --json`
-- Create one-shot delayed task:
-  - `ambrogioctl tasks create --run-at <ISO> --prompt "<text>" --user-id <id> --chat-id <id> --json`
-- Cancel task:
-  - `ambrogioctl tasks cancel --id <taskId> --json`
+- List jobs:
+  - `ambrogioctl jobs list --json`
+- Inspect job:
+  - `ambrogioctl jobs inspect --id <jobId> --json`
+- Create one-shot delayed job:
+  - `ambrogioctl jobs create --run-at <ISO> --prompt "<text>" --user-id <id> --chat-id <id> --json`
+- Cancel job:
+  - `ambrogioctl jobs cancel --id <jobId> --json`
 - Retry delivery:
-  - `ambrogioctl tasks retry --id <taskId> --json`
+  - `ambrogioctl jobs retry --id <jobId> --json`
 
-### Recurring Jobs (jobs scope)
+### Recurring Jobs
 
 - Create recurring job:
   - `ambrogioctl jobs create-recurring --run-at <ISO> --prompt "<text>" --user-id <id> --chat-id <id> --type <interval|cron> --expression <expr> [--max-runs <N>] --json`
 - List recurring jobs:
   - `ambrogioctl jobs list-recurring [--limit <N>] --json`
 - Pause recurring job:
-  - `ambrogioctl jobs pause --id <taskId> --json`
+  - `ambrogioctl jobs pause --id <jobId> --json`
 - Resume recurring job:
-  - `ambrogioctl jobs resume --id <taskId> --json`
+  - `ambrogioctl jobs resume --id <jobId> --json`
 - Update recurrence schedule:
-  - `ambrogioctl jobs update-recurrence --id <taskId> --expression <expr> --json`
+  - `ambrogioctl jobs update-recurrence --id <jobId> --expression <expr> --json`
 - Cancel recurring job (permanently):
-  - `ambrogioctl tasks cancel --id <taskId> --json` (uses tasks.cancel RPC, works for all job types)
+  - `ambrogioctl jobs cancel --id <jobId> --json` (works for all job types)
 
 ## Prompt Transformation Rules
 
-When creating delayed or recurring tasks, the `--prompt` parameter will be executed later by Ambrogio and sent to the user. **You MUST transform the user's request into a delivery-ready message that does NOT look like a new request.**
+When creating delayed or recurring jobs, the `--prompt` parameter will be executed later by Ambrogio and sent to the user. **You MUST transform the user's request into a delivery-ready message that does NOT look like a new request.**
 
 ### ❌ WRONG Examples (will cause infinite loops):
 - User: "Ricordami di cucinare il riso"
@@ -79,7 +79,7 @@ When creating delayed or recurring tasks, the `--prompt` parameter will be execu
    - User: "Ricordami di comprare il latte domani"
    - **Good prompt**: `"Promemoria: comprare il latte."`
 
-3. **Recurring task (English):**
+3. **Recurring job (English):**
    - User: "Tell me if it will rain in Milan, every day at 6am"
    - **Good prompt**: `"Check weather forecast for Milan and tell me if it will rain today"`
 
@@ -148,9 +148,9 @@ When user provides natural language, map to recurrence expressions:
 **Agent Response:**
 1. Parse time: "12:40" → ISO timestamp for today at 12:40
 2. Transform prompt: "Ricordami di cucinare il riso" → "Promemoria: è ora di cucinare il riso."
-3. Create task:
+3. Create job:
    ```bash
-   ambrogioctl tasks create \
+   ambrogioctl jobs create \
      --run-at "2026-02-10T12:40:00+01:00" \
      --prompt "Promemoria: è ora di cucinare il riso." \
      --user-id 450717824 \
@@ -224,15 +224,15 @@ When user provides natural language, map to recurrence expressions:
 
 ## Disambiguation Policy
 
-- If user says generic "lista", "task", "promemoria", "todo" and domain is unclear:
+- If user says generic "lista", "job", "promemoria", "todo" and domain is unclear:
   - Ask: "Vuole i background jobs runtime o la TODO list?"
 - Execute only after explicit user confirmation.
 - If user says "ricordami" (remind me), determine if one-shot or recurring:
-  - "ricordami domani" → one-shot delayed task (use `tasks create`)
+  - "ricordami domani" → one-shot delayed job (use `jobs create`)
   - "ricordami ogni giorno" → recurring job (use `jobs create-recurring`)
 
 ## Response Style
 
 - Keep response concise and user-facing.
-- Include task ID when action creates/cancels/retries a specific task.
+- Include job ID when action creates/cancels/retries a specific job.
 - For list operations, summarize top entries and key statuses.

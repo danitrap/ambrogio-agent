@@ -16,7 +16,7 @@ import { HEARTBEAT_FILE_NAME, HEARTBEAT_INTERVAL_MS } from "./runtime/heartbeat"
 import { sendTelegramFormattedMessage, sendTelegramTextReply } from "./runtime/message-sender";
 import { dispatchAssistantReply, resolveAudioPathForUpload } from "./runtime/reply-dispatcher";
 import { StateStore } from "./runtime/state-store";
-import { startTaskRpcServer } from "./runtime/task-rpc-server";
+import { startJobRpcServer } from "./runtime/job-rpc-server";
 import { startTelegramUpdateLoop } from "./runtime/telegram-update-loop";
 import { parseOpenTodoItems } from "./runtime/todo-snapshot";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
@@ -33,9 +33,9 @@ const MAX_TELEGRAM_DOCUMENT_BYTES = 49_000_000;
 const MAX_INLINE_ATTACHMENT_TEXT_BYTES = 64 * 1024;
 const GENERATED_SCANNED_PDFS_RELATIVE_DIR = "generated/scanned-pdfs";
 const MAX_RECENT_TELEGRAM_MESSAGES = 1000;
-const DELAYED_TASK_POLL_INTERVAL_MS = 10_000;
-type PendingBackgroundTask = ReturnType<StateStore["getPendingBackgroundTasks"]>[number];
-type ScheduledTask = ReturnType<StateStore["getDueScheduledTasks"]>[number];
+const DELAYED_JOB_POLL_INTERVAL_MS = 10_000;
+type PendingBackgroundJob = ReturnType<StateStore["getPendingBackgroundJobs"]>[number];
+type ScheduledJob = ReturnType<StateStore["getDueScheduledJobs"]>[number];
 
 function previewText(value: string, max = 160): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
@@ -347,20 +347,20 @@ async function main(): Promise<void> {
 
   const backgroundDeliveryInFlight = new Set<string>();
 
-  const deliverBackgroundTask = async (task: PendingBackgroundTask, trigger: "completion" | "heartbeat"): Promise<boolean> => {
-    if (!task.deliveryText) {
-      logger.warn("background_task_missing_delivery_text", {
-        taskId: task.taskId,
-        status: task.status,
+  const deliverBackgroundJob = async (job: PendingBackgroundJob, trigger: "completion" | "heartbeat"): Promise<boolean> => {
+    if (!job.deliveryText) {
+      logger.warn("background_job_missing_delivery_text", {
+        jobId: job.taskId,
+        status: job.status,
         trigger,
       });
       return false;
     }
-    if (backgroundDeliveryInFlight.has(task.taskId)) {
+    if (backgroundDeliveryInFlight.has(job.taskId)) {
       return false;
     }
 
-    backgroundDeliveryInFlight.add(task.taskId);
+    backgroundDeliveryInFlight.add(job.taskId);
     try {
       await dispatchAssistantReply({
         telegram,
@@ -368,150 +368,150 @@ async function main(): Promise<void> {
         tts,
         rootRealPath: dataRootRealPath,
         update: {
-          updateId: task.updateId,
-          userId: task.userId,
-          chatId: task.chatId,
+          updateId: job.updateId,
+          userId: job.userId,
+          chatId: job.chatId,
         },
-        rawReply: task.deliveryText,
-        logContext: { command: task.command ?? "background" },
+        rawReply: job.deliveryText,
+        logContext: { command: job.command ?? "background" },
         onTextSent: async (text) => {
           await recordRecentTelegramEntry(
             "assistant",
-            `background task ${task.taskId}: ${previewText(text, 120)}`,
+            `background job ${job.taskId}: ${previewText(text, 120)}`,
           );
         },
       });
-      stateStore.markBackgroundTaskDelivered(task.taskId);
-      logger.info("background_task_delivered", {
-        taskId: task.taskId,
+      stateStore.markBackgroundJobDelivered(job.taskId);
+      logger.info("background_job_delivered", {
+        jobId: job.taskId,
         trigger,
-        status: task.status,
-        chatId: task.chatId,
+        status: job.status,
+        chatId: job.chatId,
       });
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      logger.warn("background_task_delivery_failed", {
-        taskId: task.taskId,
+      logger.warn("background_job_delivery_failed", {
+        jobId: job.taskId,
         trigger,
-        status: task.status,
-        chatId: task.chatId,
+        status: job.status,
+        chatId: job.chatId,
         message,
       });
       return false;
     } finally {
-      backgroundDeliveryInFlight.delete(task.taskId);
+      backgroundDeliveryInFlight.delete(job.taskId);
     }
   };
 
-  const flushPendingBackgroundTasks = async (): Promise<void> => {
-    const pending = stateStore.getPendingBackgroundTasks(20);
+  const flushPendingBackgroundJobs = async (): Promise<void> => {
+    const pending = stateStore.getPendingBackgroundJobs(20);
     if (pending.length === 0) {
       return;
     }
-    for (const task of pending) {
-      await deliverBackgroundTask(task, "heartbeat");
+    for (const job of pending) {
+      await deliverBackgroundJob(job, "heartbeat");
     }
   };
 
-  const executeScheduledTask = async (task: ScheduledTask): Promise<void> => {
-    if (!stateStore.claimScheduledTask(task.taskId)) {
+  const executeScheduledJob = async (job: ScheduledJob): Promise<void> => {
+    if (!stateStore.claimScheduledJob(job.taskId)) {
       return;
     }
-    const prompt = task.payloadPrompt ?? task.requestPreview;
-    const isRecurring = task.kind === "recurring";
+    const prompt = job.payloadPrompt ?? job.requestPreview;
+    const isRecurring = job.kind === "recurring";
 
     try {
-      const reply = await ambrogioAgent.handleMessage(task.userId, prompt, `delayed-${task.taskId}`);
+      const reply = await ambrogioAgent.handleMessage(job.userId, prompt, `delayed-${job.taskId}`);
 
       if (isRecurring) {
         // For recurring jobs: reschedule before delivery
-        const rescheduled = stateStore.rescheduleRecurringJob(task.taskId, reply);
+        const rescheduled = stateStore.rescheduleRecurringJob(job.taskId, reply);
         if (!rescheduled) {
           // Max runs reached or disabled - mark as completed
-          const marked = stateStore.markBackgroundTaskCompleted(task.taskId, reply);
+          const marked = stateStore.markBackgroundJobCompleted(job.taskId, reply);
           if (!marked) {
-            logger.info("recurring_task_completion_dropped", { taskId: task.taskId, reason: "status_changed" });
+            logger.info("recurring_job_completion_dropped", { jobId: job.taskId, reason: "status_changed" });
             return;
           }
         }
       } else {
         // One-shot job: mark completed
-        const marked = stateStore.markBackgroundTaskCompleted(task.taskId, reply);
+        const marked = stateStore.markBackgroundJobCompleted(job.taskId, reply);
         if (!marked) {
-          logger.info("scheduled_task_result_dropped", { taskId: task.taskId, reason: "status_changed" });
+          logger.info("scheduled_job_result_dropped", { jobId: job.taskId, reason: "status_changed" });
           return;
         }
       }
 
       // Always deliver results
-      const refreshed = stateStore.getBackgroundTask(task.taskId);
+      const refreshed = stateStore.getBackgroundJob(job.taskId);
       if (!refreshed) {
         return;
       }
-      await deliverBackgroundTask(refreshed, "completion");
+      await deliverBackgroundJob(refreshed, "completion");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const failureReply = `Task schedulato fallito (${task.taskId}): ${message}`;
+      const failureReply = `Job schedulato fallito (${job.taskId}): ${message}`;
 
       if (isRecurring) {
         // Log error but keep recurring (increment run count)
-        const rescheduled = stateStore.recordRecurringJobFailure(task.taskId, message, failureReply);
+        const rescheduled = stateStore.recordRecurringJobFailure(job.taskId, message, failureReply);
         if (!rescheduled) {
           // Max runs reached - mark as failed
-          const marked = stateStore.markBackgroundTaskFailed(task.taskId, message, failureReply);
+          const marked = stateStore.markBackgroundJobFailed(job.taskId, message, failureReply);
           if (!marked) {
-            logger.info("recurring_task_failure_dropped", { taskId: task.taskId, reason: "status_changed" });
+            logger.info("recurring_job_failure_dropped", { jobId: job.taskId, reason: "status_changed" });
             return;
           }
         }
       } else {
-        const marked = stateStore.markBackgroundTaskFailed(task.taskId, message, failureReply);
+        const marked = stateStore.markBackgroundJobFailed(job.taskId, message, failureReply);
         if (!marked) {
-          logger.info("scheduled_task_failure_dropped", { taskId: task.taskId, reason: "status_changed" });
+          logger.info("scheduled_job_failure_dropped", { jobId: job.taskId, reason: "status_changed" });
           return;
         }
       }
 
-      const refreshed = stateStore.getBackgroundTask(task.taskId);
+      const refreshed = stateStore.getBackgroundJob(job.taskId);
       if (!refreshed) {
         return;
       }
-      await deliverBackgroundTask(refreshed, "completion");
+      await deliverBackgroundJob(refreshed, "completion");
     }
   };
 
-  const retryTaskDelivery = async (taskId: string): Promise<string> => {
-    const normalized = taskId.trim();
+  const retryJobDelivery = async (jobId: string): Promise<string> => {
+    const normalized = jobId.trim();
     if (!normalized) {
-      return "Task ID mancante.";
+      return "Job ID mancante.";
     }
-    const task = stateStore.getBackgroundTask(normalized);
-    if (!task) {
-      return `Task non trovato: ${normalized}`;
+    const job = stateStore.getBackgroundJob(normalized);
+    if (!job) {
+      return `Job non trovato: ${normalized}`;
     }
-    if (task.status === "completed_delivered" || task.status === "failed_delivered") {
-      return `Task ${normalized} gia consegnato.`;
+    if (job.status === "completed_delivered" || job.status === "failed_delivered") {
+      return `Job ${normalized} gia consegnato.`;
     }
-    if (task.status === "canceled") {
-      return `Task ${normalized} e cancellato.`;
+    if (job.status === "canceled") {
+      return `Job ${normalized} e cancellato.`;
     }
-    if (task.status === "scheduled") {
-      return `Task ${normalized} e schedulato; verra eseguito a ${task.runAt ?? "orario non disponibile"}.`;
+    if (job.status === "scheduled") {
+      return `Job ${normalized} e schedulato; verra eseguito a ${job.runAt ?? "orario non disponibile"}.`;
     }
-    if (task.status === "running") {
-      return `Task ${normalized} ancora in esecuzione.`;
+    if (job.status === "running") {
+      return `Job ${normalized} ancora in esecuzione.`;
     }
-    const delivered = await deliverBackgroundTask(task, "completion");
+    const delivered = await deliverBackgroundJob(job, "completion");
     return delivered
-      ? `Task ${normalized} consegnato con successo.`
-      : `Task ${normalized} non consegnato; verra ritentato automaticamente all'heartbeat.`;
+      ? `Job ${normalized} consegnato con successo.`
+      : `Job ${normalized} non consegnato; verra ritentato automaticamente all'heartbeat.`;
   };
 
-  const runDueScheduledTasks = async (): Promise<void> => {
-    const due = stateStore.getDueScheduledTasks(10);
-    for (const task of due) {
-      void executeScheduledTask(task);
+  const runDueScheduledJobs = async (): Promise<void> => {
+    const due = stateStore.getDueScheduledJobs(10);
+    for (const job of due) {
+      void executeScheduledJob(job);
     }
   };
 
@@ -589,8 +589,8 @@ async function main(): Promise<void> {
       uptime: formatDuration(nowMs - startedAtMs),
       handledMessages,
       failedMessages,
-      backgroundTasksPendingDelivery: stateStore.countPendingBackgroundTasks(),
-      scheduledTasks: stateStore.countScheduledTasks(),
+      backgroundJobsPendingDelivery: stateStore.countPendingBackgroundJobs(),
+      scheduledJobs: stateStore.countScheduledJobs(),
       heartbeat: {
         inFlight: heartbeatState.heartbeatInFlight,
         lastRunAt: heartbeatState.heartbeatLastRunAt ?? null,
@@ -619,11 +619,11 @@ async function main(): Promise<void> {
   heartbeatStateResolver = heartbeatRunner.getHeartbeatState;
 
   const rpcSocketPath = (process.env.AMBROGIO_SOCKET_PATH ?? "").trim() || "/tmp/ambrogio-agent.sock";
-  await startTaskRpcServer({
+  await startJobRpcServer({
     socketPath: rpcSocketPath,
     stateStore,
-    retryTaskDelivery: async (taskId) => {
-      return retryTaskDelivery(taskId);
+    retryJobDelivery: async (jobId) => {
+      return retryJobDelivery(jobId);
     },
     getStatus: getRuntimeStatus,
     telegram: {
@@ -646,19 +646,19 @@ async function main(): Promise<void> {
       sendDocument: async (chatId, document, fileName, caption) => await telegram.sendDocument(chatId, document, fileName, caption),
     },
   });
-  logger.info("task_rpc_server_started", { socketPath: rpcSocketPath });
+  logger.info("job_rpc_server_started", { socketPath: rpcSocketPath });
 
   setInterval(() => {
     void (async () => {
-      await flushPendingBackgroundTasks();
+      await flushPendingBackgroundJobs();
       await heartbeatRunner.runScheduledHeartbeat("timer");
     })();
   }, HEARTBEAT_INTERVAL_MS);
   setInterval(() => {
-    void runDueScheduledTasks();
-  }, DELAYED_TASK_POLL_INTERVAL_MS);
-  void flushPendingBackgroundTasks();
-  void runDueScheduledTasks();
+    void runDueScheduledJobs();
+  }, DELAYED_JOB_POLL_INTERVAL_MS);
+  void flushPendingBackgroundJobs();
+  void runDueScheduledJobs();
   logger.info("heartbeat_loop_started", {
     intervalMs: HEARTBEAT_INTERVAL_MS,
     filePath: `${config.dataRoot}/${HEARTBEAT_FILE_NAME}`,
@@ -755,7 +755,7 @@ async function main(): Promise<void> {
           }
 
           await tracked.stopTyping();
-          const taskId = `bg-${update.updateId}-${Date.now()}`;
+          const jobId = `bg-${update.updateId}-${Date.now()}`;
           logger.error("request_timed_out", {
             ...correlationFields({
               updateId: update.updateId,
@@ -764,10 +764,10 @@ async function main(): Promise<void> {
               command: params.commandName,
             }),
             timeoutMs: MODEL_TIMEOUT_MS,
-            taskId,
+            jobId,
           });
-          stateStore.createBackgroundTask({
-            taskId,
+          stateStore.createBackgroundJob({
+            jobId,
             updateId: update.updateId,
             userId: update.userId,
             chatId: update.chatId,
@@ -777,38 +777,38 @@ async function main(): Promise<void> {
 
           void tracked.operationPromise
             .then(async (reply) => {
-              const marked = stateStore.markBackgroundTaskCompleted(taskId, reply);
+              const marked = stateStore.markBackgroundJobCompleted(jobId, reply);
               if (!marked) {
-                logger.info("background_task_result_dropped", { taskId, reason: "status_changed" });
+                logger.info("background_job_result_dropped", { jobId, reason: "status_changed" });
                 return;
               }
-              const task = stateStore.getBackgroundTask(taskId);
-              if (!task) {
-                logger.warn("background_task_missing_after_complete", { taskId });
+              const job = stateStore.getBackgroundJob(jobId);
+              if (!job) {
+                logger.warn("background_job_missing_after_complete", { jobId });
                 return;
               }
-              await deliverBackgroundTask(task, "completion");
+              await deliverBackgroundJob(job, "completion");
             })
             .catch(async (error) => {
               const message = error instanceof Error ? error.message : String(error);
-              const failureReply = `Task in background fallito (ID: ${taskId}): ${message}`;
-              const marked = stateStore.markBackgroundTaskFailed(taskId, message, failureReply);
+              const failureReply = `Job in background fallito (ID: ${jobId}): ${message}`;
+              const marked = stateStore.markBackgroundJobFailed(jobId, message, failureReply);
               if (!marked) {
-                logger.info("background_task_failure_dropped", { taskId, reason: "status_changed" });
+                logger.info("background_job_failure_dropped", { jobId, reason: "status_changed" });
                 return;
               }
-              const task = stateStore.getBackgroundTask(taskId);
-              if (!task) {
-                logger.warn("background_task_missing_after_failure", { taskId, message });
+              const job = stateStore.getBackgroundJob(jobId);
+              if (!job) {
+                logger.warn("background_job_missing_after_failure", { jobId, message });
                 return;
               }
-              await deliverBackgroundTask(task, "completion");
+              await deliverBackgroundJob(job, "completion");
             });
 
           return {
             reply:
               `Operazione lunga: continuo in background e ti aggiorno appena finisce.\n` +
-              `Task ID: ${taskId}`,
+              `Job ID: ${jobId}`,
             ok: false,
           };
         };
@@ -842,8 +842,8 @@ async function main(): Promise<void> {
               `Uptime: ${uptime}`,
               `Handled messages: ${handledMessages}`,
               `Failed messages: ${failedMessages}`,
-              `Background tasks pending delivery: ${stateStore.countPendingBackgroundTasks()}`,
-              `Delayed tasks scheduled: ${stateStore.countScheduledTasks()}`,
+              `Background jobs pending delivery: ${stateStore.countPendingBackgroundJobs()}`,
+              `Delayed jobs scheduled: ${stateStore.countScheduledJobs()}`,
               `Backend command: ${config.codexCommand}`,
               `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
               `Heartbeat interval: ${Math.floor(HEARTBEAT_INTERVAL_MS / 60000)}m`,

@@ -40,8 +40,11 @@ export type JobEntry = {
 };
 
 // Type aliases for backwards compatibility
+/** @deprecated Use JobStatus instead */
 export type BackgroundTaskStatus = JobStatus;
+/** @deprecated Use JobKind instead */
 export type TaskKind = JobKind;
+/** @deprecated Use JobEntry instead */
 export type BackgroundTaskEntry = JobEntry;
 
 type RuntimeRow = { value: string };
@@ -393,8 +396,8 @@ export class StateStore {
     };
   }
 
-  createBackgroundTask(params: {
-    taskId: string;
+  createBackgroundJob(params: {
+    jobId: string;
     updateId: number;
     userId: number;
     chatId: number;
@@ -408,7 +411,7 @@ export class StateStore {
         created_at, updated_at, timed_out_at
       ) VALUES (?1, 'background', ?2, ?3, ?4, ?5, ?6, NULL, ?7, 'running', ?8, ?8, ?8)`,
       [
-        params.taskId,
+        params.jobId,
         params.updateId,
         params.userId,
         params.chatId,
@@ -420,8 +423,8 @@ export class StateStore {
     );
   }
 
-  createScheduledTask(params: {
-    taskId: string;
+  createScheduledJob(params: {
+    jobId: string;
     updateId: number;
     userId: number;
     chatId: number;
@@ -438,7 +441,7 @@ export class StateStore {
         created_at, updated_at, timed_out_at
       ) VALUES (?1, 'delayed', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'scheduled', ?9, ?9, ?9)`,
       [
-        params.taskId,
+        params.jobId,
         params.updateId,
         params.userId,
         params.chatId,
@@ -451,18 +454,18 @@ export class StateStore {
     );
   }
 
-  claimScheduledTask(taskId: string): boolean {
+  claimScheduledJob(jobId: string): boolean {
     const now = new Date().toISOString();
     const result = this.db.run(
       `UPDATE jobs
        SET status = 'running', updated_at = ?2
        WHERE task_id = ?1 AND status = 'scheduled'`,
-      [taskId, now],
+      [jobId, now],
     );
     return (result.changes ?? 0) > 0;
   }
 
-  getDueScheduledTasks(limit = 20): JobEntry[] {
+  getDueScheduledJobs(limit = 20): JobEntry[] {
     const now = new Date().toISOString();
     const rows = this.db
       .query(
@@ -481,7 +484,7 @@ export class StateStore {
     return rows.map((row) => this.mapJobRow(row));
   }
 
-  getCancelableDelayedTasksForUser(userId: number, chatId: number, limit = 10): JobEntry[] {
+  getCancelableDelayedJobsForUser(userId: number, chatId: number, limit = 10): JobEntry[] {
     const rows = this.db
       .query(
         `SELECT task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
@@ -500,11 +503,11 @@ export class StateStore {
     return rows.map((row) => this.mapJobRow(row));
   }
 
-  cancelTask(taskId: string): "not_found" | "already_done" | "canceled" {
+  cancelJob(jobId: string): "not_found" | "already_done" | "canceled" {
     const now = new Date().toISOString();
     const row = this.db
       .query("SELECT status FROM jobs WHERE task_id = ?1")
-      .get(taskId) as { status: JobStatus } | null;
+      .get(jobId) as { status: JobStatus } | null;
     if (!row) {
       return "not_found";
     }
@@ -515,12 +518,12 @@ export class StateStore {
       `UPDATE jobs
        SET status = 'canceled', updated_at = ?2, delivered_at = ?2
        WHERE task_id = ?1`,
-      [taskId, now],
+      [jobId, now],
     );
     return "canceled";
   }
 
-  markBackgroundTaskCompleted(taskId: string, deliveryText: string): boolean {
+  markBackgroundJobCompleted(jobId: string, deliveryText: string): boolean {
     const now = new Date().toISOString();
     const result = this.db.run(
       `UPDATE jobs
@@ -531,12 +534,12 @@ export class StateStore {
            error_message = NULL
        WHERE task_id = ?1
          AND status = 'running'`,
-      [taskId, now, deliveryText],
+      [jobId, now, deliveryText],
     );
     return (result.changes ?? 0) > 0;
   }
 
-  markBackgroundTaskFailed(taskId: string, errorMessage: string, deliveryText: string): boolean {
+  markBackgroundJobFailed(jobId: string, errorMessage: string, deliveryText: string): boolean {
     const now = new Date().toISOString();
     const result = this.db.run(
       `UPDATE jobs
@@ -547,12 +550,12 @@ export class StateStore {
            error_message = ?4
        WHERE task_id = ?1
          AND status = 'running'`,
-      [taskId, now, deliveryText, errorMessage],
+      [jobId, now, deliveryText, errorMessage],
     );
     return (result.changes ?? 0) > 0;
   }
 
-  markBackgroundTaskDelivered(taskId: string): void {
+  markBackgroundJobDelivered(jobId: string): void {
     const now = new Date().toISOString();
     this.db.run(
       `UPDATE jobs
@@ -564,11 +567,11 @@ export class StateStore {
            delivered_at = ?2
        WHERE task_id = ?1
          AND status IN ('completed_pending_delivery', 'failed_pending_delivery')`,
-      [taskId, now],
+      [jobId, now],
     );
   }
 
-  getPendingBackgroundTasks(limit = 20): JobEntry[] {
+  getPendingBackgroundJobs(limit = 20): JobEntry[] {
     const rows = this.db
       .query(
         `SELECT task_id, update_id, user_id, chat_id, command, request_preview, status,
@@ -585,7 +588,7 @@ export class StateStore {
     return rows.map((row) => this.mapJobRow(row));
   }
 
-  getActiveBackgroundTasks(limit = 20): JobEntry[] {
+  getActiveBackgroundJobs(limit = 20): JobEntry[] {
     const rows = this.db
       .query(
         `SELECT task_id, update_id, user_id, chat_id, command, request_preview, status,
@@ -602,7 +605,7 @@ export class StateStore {
     return rows.map((row) => this.mapJobRow(row));
   }
 
-  getBackgroundTask(taskId: string): JobEntry | null {
+  getBackgroundJob(jobId: string): JobEntry | null {
     const row = this.db
       .query(
         `SELECT task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
@@ -611,7 +614,7 @@ export class StateStore {
          FROM jobs
          WHERE task_id = ?1`,
       )
-      .get(taskId) as JobRow | null;
+      .get(jobId) as JobRow | null;
 
     if (!row) {
       return null;
@@ -619,7 +622,7 @@ export class StateStore {
     return this.mapJobRow(row);
   }
 
-  countPendingBackgroundTasks(): number {
+  countPendingBackgroundJobs(): number {
     const row = this.db
       .query(
         `SELECT COUNT(*) AS total
@@ -630,7 +633,7 @@ export class StateStore {
     return row?.total ?? 0;
   }
 
-  countScheduledTasks(): number {
+  countScheduledJobs(): number {
     const row = this.db
       .query(
         `SELECT COUNT(*) AS total
@@ -641,7 +644,7 @@ export class StateStore {
     return row?.total ?? 0;
   }
 
-  clearBackgroundTasks(): void {
+  clearBackgroundJobs(): void {
     this.db.run("DELETE FROM jobs");
   }
 
@@ -726,7 +729,7 @@ export class StateStore {
   }
 
   createRecurringJob(params: {
-    taskId: string;
+    jobId: string;
     updateId: number;
     userId: number;
     chatId: number;
@@ -747,7 +750,7 @@ export class StateStore {
         recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled
       ) VALUES (?1, 'recurring', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'scheduled', ?9, ?9, ?9, ?10, ?11, ?12, 0, 1)`,
       [
-        params.taskId,
+        params.jobId,
         params.updateId,
         params.userId,
         params.chatId,
@@ -763,8 +766,8 @@ export class StateStore {
     );
   }
 
-  rescheduleRecurringJob(taskId: string, deliveryText: string): boolean {
-    const job = this.getBackgroundTask(taskId);
+  rescheduleRecurringJob(jobId: string, deliveryText: string): boolean {
+    const job = this.getBackgroundJob(jobId);
     if (!job || job.kind !== "recurring") {
       return false;
     }
@@ -794,14 +797,14 @@ export class StateStore {
            error_message = NULL,
            recurrence_run_count = ?5
        WHERE task_id = ?1`,
-      [taskId, now, nextRunAt, deliveryText, newRunCount],
+      [jobId, now, nextRunAt, deliveryText, newRunCount],
     );
 
     return true;
   }
 
-  recordRecurringJobFailure(taskId: string, errorMessage: string, deliveryText: string): boolean {
-    const job = this.getBackgroundTask(taskId);
+  recordRecurringJobFailure(jobId: string, errorMessage: string, deliveryText: string): boolean {
+    const job = this.getBackgroundJob(jobId);
     if (!job || job.kind !== "recurring") {
       return false;
     }
@@ -825,7 +828,7 @@ export class StateStore {
              error_message = ?4,
              recurrence_run_count = ?5
          WHERE task_id = ?1`,
-        [taskId, now, deliveryText, errorMessage, newRunCount],
+        [jobId, now, deliveryText, errorMessage, newRunCount],
       );
       return false;
     }
@@ -844,30 +847,30 @@ export class StateStore {
            error_message = ?5,
            recurrence_run_count = ?6
        WHERE task_id = ?1`,
-      [taskId, now, nextRunAt, deliveryText, errorMessage, newRunCount],
+      [jobId, now, nextRunAt, deliveryText, errorMessage, newRunCount],
     );
 
     return true;
   }
 
-  pauseRecurringJob(taskId: string): boolean {
+  pauseRecurringJob(jobId: string): boolean {
     const result = this.db.run(
       `UPDATE jobs
        SET recurrence_enabled = 0,
            updated_at = ?2
        WHERE task_id = ?1 AND kind = 'recurring'`,
-      [taskId, new Date().toISOString()],
+      [jobId, new Date().toISOString()],
     );
     return (result.changes ?? 0) > 0;
   }
 
-  resumeRecurringJob(taskId: string): boolean {
+  resumeRecurringJob(jobId: string): boolean {
     const result = this.db.run(
       `UPDATE jobs
        SET recurrence_enabled = 1,
            updated_at = ?2
        WHERE task_id = ?1 AND kind = 'recurring'`,
-      [taskId, new Date().toISOString()],
+      [jobId, new Date().toISOString()],
     );
     return (result.changes ?? 0) > 0;
   }
@@ -888,18 +891,18 @@ export class StateStore {
     return rows.map((row) => this.mapJobRow(row));
   }
 
-  updateRecurrenceExpression(taskId: string, expression: string): boolean {
+  updateRecurrenceExpression(jobId: string, expression: string): boolean {
     const result = this.db.run(
       `UPDATE jobs
        SET recurrence_expression = ?2,
            updated_at = ?3
        WHERE task_id = ?1 AND kind = 'recurring'`,
-      [taskId, expression, new Date().toISOString()],
+      [jobId, expression, new Date().toISOString()],
     );
     return (result.changes ?? 0) > 0;
   }
 
-  cancelRecurringJob(taskId: string): "not_found" | "already_done" | "canceled" {
-    return this.cancelTask(taskId);
+  cancelRecurringJob(jobId: string): "not_found" | "already_done" | "canceled" {
+    return this.cancelJob(jobId);
   }
 }

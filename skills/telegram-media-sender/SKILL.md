@@ -1,6 +1,6 @@
 ---
 name: telegram-media-sender
-description: Send local files to Telegram through Ambrogio task RPC using ambrogioctl media commands.
+description: Send local files to Telegram through Ambrogio job RPC using ambrogioctl media commands.
 ---
 
 # Telegram Media Sender

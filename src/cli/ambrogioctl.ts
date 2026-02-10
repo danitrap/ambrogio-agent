@@ -70,12 +70,13 @@ async function defaultSendRpc(socketPath: string, op: string, args: Record<strin
 }
 
 function formatResult(op: string, result: unknown): string {
-  if (op === "tasks.list") {
-    const tasks = (result as { tasks?: Array<{ taskId: string; status: string; kind?: string; runAt?: string | null }> }).tasks ?? [];
-    if (tasks.length === 0) {
-      return "No tasks.";
+  // Support both old tasks.list and new jobs.list
+  if (op === "tasks.list" || op === "jobs.list") {
+    const jobs = (result as { tasks?: Array<{ taskId: string; status: string; kind?: string; runAt?: string | null }> }).tasks ?? [];
+    if (jobs.length === 0) {
+      return "No jobs.";
     }
-    return tasks.map((task) => `${task.taskId} | ${task.kind ?? "task"} | ${task.status}${task.runAt ? ` | runAt=${task.runAt}` : ""}`).join("\n");
+    return jobs.map((job) => `${job.taskId} | ${job.kind ?? "job"} | ${job.status}${job.runAt ? ` | runAt=${job.runAt}` : ""}`).join("\n");
   }
   if (op === "jobs.list-recurring") {
     const jobs = (result as { jobs?: Array<{
@@ -594,6 +595,47 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
       payload.taskId = id;
       payload.expression = expression;
       op = "jobs.update-recurrence";
+    } else if (action === "list") {
+      op = "jobs.list";
+      const limitRaw = readFlag(args, "--limit");
+      if (limitRaw) {
+        const limit = Number(limitRaw);
+        if (Number.isNaN(limit) || limit <= 0) {
+          stderr("--limit must be a positive number.");
+          return 2;
+        }
+        payload.limit = limit;
+      }
+    } else if (action === "inspect" || action === "cancel" || action === "retry") {
+      const id = readFlag(args, "--id");
+      if (!id) {
+        stderr("--id is required.");
+        return 2;
+      }
+      payload.taskId = id;
+      op = `jobs.${action}`;
+    } else if (action === "create") {
+      const runAtIso = readFlag(args, "--run-at");
+      const prompt = readFlag(args, "--prompt");
+      const userIdRaw = readFlag(args, "--user-id");
+      const chatIdRaw = readFlag(args, "--chat-id");
+      if (!runAtIso || !prompt || !userIdRaw || !chatIdRaw) {
+        stderr("--run-at, --prompt, --user-id, --chat-id are required.");
+        return 2;
+      }
+      const userId = Number(userIdRaw);
+      const chatId = Number(chatIdRaw);
+      if (Number.isNaN(userId) || Number.isNaN(chatId)) {
+        stderr("--user-id and --chat-id must be numbers.");
+        return 2;
+      }
+      op = "jobs.create";
+      payload = {
+        runAtIso,
+        prompt,
+        userId,
+        chatId,
+      };
     } else {
       stderr(`Unknown action: ${action}`);
       return 2;
@@ -618,79 +660,15 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
     }
   }
 
-  if (scope !== "tasks" || !action) {
-    stderr("Usage: ambrogioctl <tasks|jobs|status|telegram|state|conversation> [options]");
-    return 2;
+  // Handle deprecated "tasks" scope - map to jobs
+  if (scope === "tasks") {
+    stderr("Warning: 'tasks' scope is deprecated. Use 'jobs' instead.");
+    // Recursively call with "jobs" scope instead
+    return await runAmbrogioCtl(["jobs", action, ...args], deps);
   }
 
-  const json = hasFlag(args, "--json");
-
-  let op = "";
-  let payload: Record<string, unknown> = {};
-
-  if (action === "list") {
-    op = "tasks.list";
-    const limitRaw = readFlag(args, "--limit");
-    if (limitRaw) {
-      const limit = Number(limitRaw);
-      if (Number.isNaN(limit) || limit <= 0) {
-        stderr("--limit must be a positive number.");
-        return 2;
-      }
-      payload.limit = limit;
-    }
-  } else if (action === "inspect" || action === "cancel" || action === "retry") {
-    const id = readFlag(args, "--id");
-    if (!id) {
-      stderr("--id is required.");
-      return 2;
-    }
-    payload.taskId = id;
-    op = `tasks.${action}`;
-  } else if (action === "create") {
-    const runAtIso = readFlag(args, "--run-at");
-    const prompt = readFlag(args, "--prompt");
-    const userIdRaw = readFlag(args, "--user-id");
-    const chatIdRaw = readFlag(args, "--chat-id");
-    if (!runAtIso || !prompt || !userIdRaw || !chatIdRaw) {
-      stderr("--run-at, --prompt, --user-id, --chat-id are required.");
-      return 2;
-    }
-    const userId = Number(userIdRaw);
-    const chatId = Number(chatIdRaw);
-    if (Number.isNaN(userId) || Number.isNaN(chatId)) {
-      stderr("--user-id and --chat-id must be numbers.");
-      return 2;
-    }
-    op = "tasks.create";
-    payload = {
-      runAtIso,
-      prompt,
-      userId,
-      chatId,
-    };
-  } else {
-    stderr(`Unknown action: ${action}`);
-    return 2;
-  }
-
-  try {
-    const response = await sendRpc(op, payload);
-    if (!response.ok) {
-      stderr(response.error.message);
-      return mapErrorCodeToExit(response.error.code);
-    }
-    if (json) {
-      stdout(JSON.stringify(response.result));
-    } else {
-      stdout(formatResult(op, response.result));
-    }
-    return 0;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    stderr(message);
-    return 10;
-  }
+  stderr("Usage: ambrogioctl <jobs|tasks|status|telegram|state|conversation> [options]");
+  return 2;
 }
 
 if (import.meta.main) {

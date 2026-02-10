@@ -75,29 +75,29 @@ describe("StateStore", () => {
     tempDirs.push(root);
 
     const storeA = await StateStore.open(root);
-    storeA.createBackgroundTask({
-      taskId: "bg-1",
+    storeA.createBackgroundJob({
+      jobId:"bg-1",
       updateId: 101,
       userId: 202,
       chatId: 303,
       command: "retry",
       requestPreview: "long-running task",
     });
-    const activeRunning = storeA.getActiveBackgroundTasks(10);
+    const activeRunning = storeA.getActiveBackgroundJobs(10);
     expect(activeRunning).toHaveLength(1);
     expect(activeRunning[0]?.status).toBe("running");
-    expect(storeA.markBackgroundTaskCompleted("bg-1", "<response_mode>text</response_mode>\ncompleted")).toBe(true);
-    expect(storeA.countPendingBackgroundTasks()).toBe(1);
+    expect(storeA.markBackgroundJobCompleted("bg-1", "<response_mode>text</response_mode>\ncompleted")).toBe(true);
+    expect(storeA.countPendingBackgroundJobs()).toBe(1);
     storeA.close();
 
     const storeB = await StateStore.open(root);
-    const pending = storeB.getPendingBackgroundTasks(10);
+    const pending = storeB.getPendingBackgroundJobs(10);
     expect(pending).toHaveLength(1);
     expect(pending[0]?.taskId).toBe("bg-1");
     expect(pending[0]?.status).toBe("completed_pending_delivery");
     expect(pending[0]?.deliveryText).toContain("completed");
-    storeB.markBackgroundTaskDelivered("bg-1");
-    expect(storeB.countPendingBackgroundTasks()).toBe(0);
+    storeB.markBackgroundJobDelivered("bg-1");
+    expect(storeB.countPendingBackgroundJobs()).toBe(0);
     storeB.close();
   });
 
@@ -106,8 +106,8 @@ describe("StateStore", () => {
     tempDirs.push(root);
 
     const store = await StateStore.open(root);
-    store.createScheduledTask({
-      taskId: "dl-1",
+    store.createScheduledJob({
+      jobId:"dl-1",
       updateId: 1,
       userId: 2,
       chatId: 3,
@@ -115,14 +115,14 @@ describe("StateStore", () => {
       requestPreview: "top post hn",
       runAt: "2026-02-08T10:00:00.000Z",
     });
-    expect(store.countScheduledTasks()).toBe(1);
-    const due = store.getDueScheduledTasks(10);
+    expect(store.countScheduledJobs()).toBe(1);
+    const due = store.getDueScheduledJobs(10);
     expect(due).toHaveLength(1);
     expect(due[0]?.kind).toBe("delayed");
-    expect(store.claimScheduledTask("dl-1")).toBe(true);
-    expect(store.claimScheduledTask("dl-1")).toBe(false);
-    expect(store.cancelTask("dl-1")).toBe("canceled");
-    expect(store.markBackgroundTaskCompleted("dl-1", "done")).toBe(false);
+    expect(store.claimScheduledJob("dl-1")).toBe(true);
+    expect(store.claimScheduledJob("dl-1")).toBe(false);
+    expect(store.cancelJob("dl-1")).toBe("canceled");
+    expect(store.markBackgroundJobCompleted("dl-1", "done")).toBe(false);
     store.close();
   });
 
@@ -131,8 +131,8 @@ describe("StateStore", () => {
     tempDirs.push(root);
 
     const store = await StateStore.open(root);
-    store.createScheduledTask({
-      taskId: "dl-tz",
+    store.createScheduledJob({
+      jobId:"dl-tz",
       updateId: 1,
       userId: 2,
       chatId: 3,
@@ -141,7 +141,7 @@ describe("StateStore", () => {
       runAt: "2026-02-08T16:43:11.198+01:00",
     });
 
-    const due = store.getDueScheduledTasks(10);
+    const due = store.getDueScheduledJobs(10);
     expect(due.some((task) => task.taskId === "dl-tz")).toBe(true);
     store.close();
   });
@@ -151,8 +151,8 @@ describe("StateStore", () => {
     tempDirs.push(root);
 
     const store = await StateStore.open(root);
-    store.createScheduledTask({
-      taskId: "dl-a",
+    store.createScheduledJob({
+      jobId:"dl-a",
       updateId: 1,
       userId: 10,
       chatId: 20,
@@ -160,8 +160,8 @@ describe("StateStore", () => {
       requestPreview: "A",
       runAt: "2026-02-08T10:00:00.000Z",
     });
-    store.createScheduledTask({
-      taskId: "dl-b",
+    store.createScheduledJob({
+      jobId:"dl-b",
       updateId: 2,
       userId: 10,
       chatId: 20,
@@ -169,8 +169,8 @@ describe("StateStore", () => {
       requestPreview: "B",
       runAt: "2026-02-08T10:05:00.000Z",
     });
-    store.createScheduledTask({
-      taskId: "dl-other-user",
+    store.createScheduledJob({
+      jobId:"dl-other-user",
       updateId: 3,
       userId: 11,
       chatId: 20,
@@ -178,8 +178,8 @@ describe("StateStore", () => {
       requestPreview: "X",
       runAt: "2026-02-08T10:10:00.000Z",
     });
-    store.createScheduledTask({
-      taskId: "dl-other-chat",
+    store.createScheduledJob({
+      jobId:"dl-other-chat",
       updateId: 4,
       userId: 10,
       chatId: 21,
@@ -187,9 +187,9 @@ describe("StateStore", () => {
       requestPreview: "Y",
       runAt: "2026-02-08T10:15:00.000Z",
     });
-    store.cancelTask("dl-a");
+    store.cancelJob("dl-a");
 
-    const scoped = store.getCancelableDelayedTasksForUser(10, 20, 10);
+    const scoped = store.getCancelableDelayedJobsForUser(10, 20, 10);
     expect(scoped.map((task) => task.taskId)).toEqual(["dl-b"]);
     store.close();
   });

@@ -25,14 +25,14 @@ Hai accesso completo a:
 
 2. **Raccogli contesto**: Esplora lo stato del sistema
    - Runtime status: `ambrogioctl status --json`
-   - Task pending: `ambrogioctl tasks list`
+   - Jobs pending: `ambrogioctl jobs list`
    - TODO items: `cat /data/TODO.md`
    - Git status: `git -C /data status --short` (se applicabile)
    - **Conversation history**: `ambrogioctl conversation stats --user-id <UID>` e `ambrogioctl conversation list --user-id <UID>`
    - Qualsiasi altro file/comando rilevante per la policy
 
 3. **Valuta policy**: Determina se serve un'azione
-   - Verifica thresholds (idle time, task age, ecc.)
+   - Verifica thresholds (idle time, job age, ecc.)
    - **Verifica conversazione**: Quanto tempo è passato dall'ultimo messaggio?
    - **Controlla pending items**: Ci sono richieste non risolte nella conversazione?
    - Decidi: niente, checkin, o alert
@@ -171,14 +171,14 @@ find_pending_requests() {
 ```bash
 find_todo_mentions() {
   local user_id="$1"
-  
+
   # Cerca menzioni di TODO nella conversazione
   conv_export=$(ambrogioctl conversation export --user-id "$user_id" --format json 2>/dev/null)
-  
+
   if [[ -n "$conv_export" ]]; then
-    # Estrai messaggi che menzionano TODO/task
-    todo_mentions=$(echo "$conv_export" | jq -r '.entries[] | select(.text | test("todo|task|da fare|promemoria|reminder"; "i")) | "[\(.role)] \(.text)"' 2>/dev/null)
-    
+    # Estrai messaggi che menzionano TODO/job
+    todo_mentions=$(echo "$conv_export" | jq -r '.entries[] | select(.text | test("todo|job|da fare|promemoria|reminder"; "i")) | "[\(.role)] \(.text)"' 2>/dev/null)
+
     if [[ -n "$todo_mentions" ]]; then
       echo "Menzioni di TODO trovate:"
       echo "$todo_mentions"
@@ -301,7 +301,7 @@ if [[ -n "$last_time" ]]; then
   fi
 fi
 
-# 4. Controlla anche TODO, task pending, etc.
+# 4. Controlla anche TODO, jobs pending, etc.
 # ... (codice esistente)
 ```
 

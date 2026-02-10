@@ -20,7 +20,7 @@ This file contains persistent instructions for all Codex agent invocations.
 ## Tool Usage
 
 - Use available Codex tools (shell, apply_patch, etc.) when useful
-- Use `ambrogioctl` for task RPC operations (tasks, jobs, conversation, state, telegram)
+- Use `ambrogioctl` for job RPC operations (jobs, conversation, state, telegram)
 - Always parse JSON output from `ambrogioctl` commands using `--json` flag
 - Skills provide detailed command references when loaded
 

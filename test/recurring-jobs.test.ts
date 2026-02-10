@@ -34,7 +34,7 @@ describe("Recurring Jobs", () => {
     const runAt = new Date(Date.now() + 3600000).toISOString(); // 1 hour from now
 
     stateStore.createRecurringJob({
-      taskId,
+      jobId: taskId,
       updateId: 0,
       userId: 123,
       chatId: 123,
@@ -45,7 +45,7 @@ describe("Recurring Jobs", () => {
       recurrenceExpression: "1h",
     });
 
-    const job = stateStore.getBackgroundTask(taskId);
+    const job = stateStore.getBackgroundJob(taskId);
     expect(job).not.toBeNull();
     expect(job?.kind).toBe("recurring");
     expect(job?.recurrenceType).toBe("interval");
@@ -59,7 +59,7 @@ describe("Recurring Jobs", () => {
     const runAt = new Date(Date.now() + 3600000).toISOString();
 
     stateStore.createRecurringJob({
-      taskId,
+      jobId: taskId,
       updateId: 0,
       userId: 123,
       chatId: 123,
@@ -70,7 +70,7 @@ describe("Recurring Jobs", () => {
       recurrenceExpression: "0 9 * * *",
     });
 
-    const job = stateStore.getBackgroundTask(taskId);
+    const job = stateStore.getBackgroundJob(taskId);
     expect(job).not.toBeNull();
     expect(job?.kind).toBe("recurring");
     expect(job?.recurrenceType).toBe("cron");
@@ -82,7 +82,7 @@ describe("Recurring Jobs", () => {
     const runAt = new Date(Date.now() + 3600000).toISOString();
 
     stateStore.createRecurringJob({
-      taskId,
+      jobId: taskId,
       updateId: 0,
       userId: 123,
       chatId: 123,
@@ -94,13 +94,13 @@ describe("Recurring Jobs", () => {
     });
 
     // Claim and reschedule
-    const claimed = stateStore.claimScheduledTask(taskId);
+    const claimed = stateStore.claimScheduledJob(taskId);
     expect(claimed).toBe(true);
 
     const rescheduled = stateStore.rescheduleRecurringJob(taskId, "Job completed");
     expect(rescheduled).toBe(true);
 
-    const job = stateStore.getBackgroundTask(taskId);
+    const job = stateStore.getBackgroundJob(taskId);
     expect(job?.status).toBe("scheduled");
     expect(job?.recurrenceRunCount).toBe(1);
     // Check that the new run time is approximately 1 hour from now
@@ -114,7 +114,7 @@ describe("Recurring Jobs", () => {
     const runAt = new Date(Date.now() + 3600000).toISOString();
 
     stateStore.createRecurringJob({
-      taskId,
+      jobId: taskId,
       updateId: 0,
       userId: 123,
       chatId: 123,
@@ -127,27 +127,27 @@ describe("Recurring Jobs", () => {
     });
 
     // First execution
-    stateStore.claimScheduledTask(taskId);
+    stateStore.claimScheduledJob(taskId);
     let rescheduled = stateStore.rescheduleRecurringJob(taskId, "Run 1");
     expect(rescheduled).toBe(true);
 
-    let job = stateStore.getBackgroundTask(taskId);
+    let job = stateStore.getBackgroundJob(taskId);
     expect(job?.recurrenceRunCount).toBe(1);
 
     // Second execution (maxRuns=2 means it can run up to 2 times)
-    stateStore.claimScheduledTask(taskId);
+    stateStore.claimScheduledJob(taskId);
     rescheduled = stateStore.rescheduleRecurringJob(taskId, "Run 2");
     expect(rescheduled).toBe(true); // Still within max runs
 
-    job = stateStore.getBackgroundTask(taskId);
+    job = stateStore.getBackgroundJob(taskId);
     expect(job?.recurrenceRunCount).toBe(2);
 
     // Third execution attempt (should fail)
-    stateStore.claimScheduledTask(taskId);
+    stateStore.claimScheduledJob(taskId);
     rescheduled = stateStore.rescheduleRecurringJob(taskId, "Run 3");
     expect(rescheduled).toBe(false); // Max runs exceeded
 
-    job = stateStore.getBackgroundTask(taskId);
+    job = stateStore.getBackgroundJob(taskId);
     expect(job?.recurrenceRunCount).toBe(2); // Count doesn't increment on failure
   });
 
@@ -156,7 +156,7 @@ describe("Recurring Jobs", () => {
     const runAt = new Date(Date.now() + 3600000).toISOString();
 
     stateStore.createRecurringJob({
-      taskId,
+      jobId: taskId,
       updateId: 0,
       userId: 123,
       chatId: 123,
@@ -171,11 +171,11 @@ describe("Recurring Jobs", () => {
     const paused = stateStore.pauseRecurringJob(taskId);
     expect(paused).toBe(true);
 
-    let job = stateStore.getBackgroundTask(taskId);
+    let job = stateStore.getBackgroundJob(taskId);
     expect(job?.recurrenceEnabled).toBe(false);
 
     // Try to reschedule while paused (should fail)
-    stateStore.claimScheduledTask(taskId);
+    stateStore.claimScheduledJob(taskId);
     const rescheduled = stateStore.rescheduleRecurringJob(taskId, "Test");
     expect(rescheduled).toBe(false);
 
@@ -183,7 +183,7 @@ describe("Recurring Jobs", () => {
     const resumed = stateStore.resumeRecurringJob(taskId);
     expect(resumed).toBe(true);
 
-    job = stateStore.getBackgroundTask(taskId);
+    job = stateStore.getBackgroundJob(taskId);
     expect(job?.recurrenceEnabled).toBe(true);
   });
 
@@ -194,7 +194,7 @@ describe("Recurring Jobs", () => {
       const runAt = new Date(Date.now() + 3600000).toISOString();
 
       stateStore.createRecurringJob({
-        taskId,
+        jobId: taskId,
         updateId: 0,
         userId: 123,
         chatId: 123,
@@ -216,7 +216,7 @@ describe("Recurring Jobs", () => {
     const runAt = new Date(Date.now() + 3600000).toISOString();
 
     stateStore.createRecurringJob({
-      taskId,
+      jobId: taskId,
       updateId: 0,
       userId: 123,
       chatId: 123,
@@ -230,7 +230,7 @@ describe("Recurring Jobs", () => {
     const updated = stateStore.updateRecurrenceExpression(taskId, "2h");
     expect(updated).toBe(true);
 
-    const job = stateStore.getBackgroundTask(taskId);
+    const job = stateStore.getBackgroundJob(taskId);
     expect(job?.recurrenceExpression).toBe("2h");
   });
 
@@ -239,7 +239,7 @@ describe("Recurring Jobs", () => {
     const runAt = new Date(Date.now() + 3600000).toISOString();
 
     stateStore.createRecurringJob({
-      taskId,
+      jobId: taskId,
       updateId: 0,
       userId: 123,
       chatId: 123,
@@ -251,7 +251,7 @@ describe("Recurring Jobs", () => {
     });
 
     // Claim and fail
-    stateStore.claimScheduledTask(taskId);
+    stateStore.claimScheduledJob(taskId);
     const rescheduled = stateStore.recordRecurringJobFailure(
       taskId,
       "Test error",
@@ -259,7 +259,7 @@ describe("Recurring Jobs", () => {
     );
     expect(rescheduled).toBe(true);
 
-    const job = stateStore.getBackgroundTask(taskId);
+    const job = stateStore.getBackgroundJob(taskId);
     expect(job?.status).toBe("scheduled"); // Should be rescheduled despite failure
     expect(job?.recurrenceRunCount).toBe(1);
     expect(job?.errorMessage).toBe("Test error");
@@ -268,7 +268,7 @@ describe("Recurring Jobs", () => {
   test("should migrate from background_tasks to jobs table", async () => {
     // This test would require creating an old database format
     // For now, we just verify the new schema works
-    const job = stateStore.getBackgroundTask("non-existent");
+    const job = stateStore.getBackgroundJob("non-existent");
     expect(job).toBeNull();
   });
 });
@@ -300,7 +300,7 @@ describe("Time Calculations", () => {
     const runAt = new Date(Date.now() + 60000).toISOString(); // 1 minute from now
 
     stateStore.createRecurringJob({
-      taskId,
+      jobId: taskId,
       updateId: 0,
       userId: 123,
       chatId: 123,
@@ -311,10 +311,10 @@ describe("Time Calculations", () => {
       recurrenceExpression: "30m",
     });
 
-    stateStore.claimScheduledTask(taskId);
+    stateStore.claimScheduledJob(taskId);
     stateStore.rescheduleRecurringJob(taskId, "Test");
 
-    const job = stateStore.getBackgroundTask(taskId);
+    const job = stateStore.getBackgroundJob(taskId);
     const nextRunTime = new Date(job!.runAt!);
     const expectedTime = new Date(Date.now() + 30 * 60 * 1000);
 
@@ -327,7 +327,7 @@ describe("Time Calculations", () => {
     const runAt = new Date(Date.now() + 60000).toISOString();
 
     stateStore.createRecurringJob({
-      taskId,
+      jobId: taskId,
       updateId: 0,
       userId: 123,
       chatId: 123,
@@ -338,10 +338,10 @@ describe("Time Calculations", () => {
       recurrenceExpression: "2h",
     });
 
-    stateStore.claimScheduledTask(taskId);
+    stateStore.claimScheduledJob(taskId);
     stateStore.rescheduleRecurringJob(taskId, "Test");
 
-    const job = stateStore.getBackgroundTask(taskId);
+    const job = stateStore.getBackgroundJob(taskId);
     const nextRunTime = new Date(job!.runAt!);
     const expectedTime = new Date(Date.now() + 2 * 60 * 60 * 1000);
 
@@ -353,7 +353,7 @@ describe("Time Calculations", () => {
     const runAt = new Date(Date.now() + 60000).toISOString();
 
     stateStore.createRecurringJob({
-      taskId,
+      jobId: taskId,
       updateId: 0,
       userId: 123,
       chatId: 123,
@@ -364,10 +364,10 @@ describe("Time Calculations", () => {
       recurrenceExpression: "1d",
     });
 
-    stateStore.claimScheduledTask(taskId);
+    stateStore.claimScheduledJob(taskId);
     stateStore.rescheduleRecurringJob(taskId, "Test");
 
-    const job = stateStore.getBackgroundTask(taskId);
+    const job = stateStore.getBackgroundJob(taskId);
     const nextRunTime = new Date(job!.runAt!);
     const expectedTime = new Date(Date.now() + 24 * 60 * 60 * 1000);
 

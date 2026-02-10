@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createConnection } from "node:net";
 import { StateStore } from "../src/runtime/state-store";
-import { startTaskRpcServer } from "../src/runtime/task-rpc-server";
+import { startJobRpcServer } from "../src/runtime/job-rpc-server";
 
 type RpcResponse = {
   ok: boolean;
@@ -58,7 +58,7 @@ async function rpcCall(socketPath: string, request: unknown): Promise<RpcRespons
   });
 }
 
-describe("TaskRpcServer", () => {
+describe("JobRpcServer", () => {
   test("lists active tasks and supports inspect/create/cancel/retry", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "task-rpc-"));
     tempDirs.push(root);
@@ -67,21 +67,21 @@ describe("TaskRpcServer", () => {
     const retried: string[] = [];
     const socketPath = path.join(root, "runtime", "ambrogio.sock");
 
-    const server = await startTaskRpcServer({
+    const server = await startJobRpcServer({
       socketPath,
       stateStore,
-      retryTaskDelivery: async (taskId) => {
+      retryJobDelivery: async (taskId) => {
         retried.push(taskId);
         return `retried:${taskId}`;
       },
     });
 
-    const emptyList = await rpcCall(socketPath, { op: "tasks.list", args: { limit: 10 } });
+    const emptyList = await rpcCall(socketPath, { op: "jobs.list", args: { limit: 10 } });
     expect(emptyList.ok).toBe(true);
     expect(emptyList.result).toEqual({ tasks: [] });
 
     const create = await rpcCall(socketPath, {
-      op: "tasks.create",
+      op: "jobs.create",
       args: {
         runAtIso: "2099-01-01T10:00:00.000Z",
         prompt: "send hello",
@@ -94,29 +94,29 @@ describe("TaskRpcServer", () => {
     const createdTaskId = (create.result as { taskId: string }).taskId;
     expect(createdTaskId.startsWith("dl-rpc-")).toBe(true);
 
-    const listed = await rpcCall(socketPath, { op: "tasks.list", args: { limit: 10 } });
+    const listed = await rpcCall(socketPath, { op: "jobs.list", args: { limit: 10 } });
     expect(listed.ok).toBe(true);
     const tasks = (listed.result as { tasks: Array<{ taskId: string; status: string }> }).tasks;
     expect(tasks.some((task) => task.taskId === createdTaskId && task.status === "scheduled")).toBe(true);
 
-    const inspect = await rpcCall(socketPath, { op: "tasks.inspect", args: { taskId: createdTaskId } });
+    const inspect = await rpcCall(socketPath, { op: "jobs.inspect", args: { taskId: createdTaskId } });
     expect(inspect.ok).toBe(true);
     expect((inspect.result as { taskId: string }).taskId).toBe(createdTaskId);
 
-    const cancel = await rpcCall(socketPath, { op: "tasks.cancel", args: { taskId: createdTaskId } });
+    const cancel = await rpcCall(socketPath, { op: "jobs.cancel", args: { taskId: createdTaskId } });
     expect(cancel).toEqual({ ok: true, result: { status: "canceled", taskId: createdTaskId } });
 
-    stateStore.createBackgroundTask({
-      taskId: "bg-rpc-1",
+    stateStore.createBackgroundJob({
+      jobId: "bg-rpc-1",
       updateId: 10,
       userId: 1,
       chatId: 2,
       requestPreview: "bg",
       command: "rpc",
     });
-    expect(stateStore.markBackgroundTaskCompleted("bg-rpc-1", "done")).toBe(true);
+    expect(stateStore.markBackgroundJobCompleted("bg-rpc-1", "done")).toBe(true);
 
-    const retry = await rpcCall(socketPath, { op: "tasks.retry", args: { taskId: "bg-rpc-1" } });
+    const retry = await rpcCall(socketPath, { op: "jobs.retry", args: { taskId: "bg-rpc-1" } });
     expect(retry).toEqual({ ok: true, result: { message: "retried:bg-rpc-1", taskId: "bg-rpc-1" } });
     expect(retried).toEqual(["bg-rpc-1"]);
 
@@ -132,10 +132,10 @@ describe("TaskRpcServer", () => {
     const socketPath = path.join(root, "runtime", "ambrogio-status.sock");
     const statusData = { now: "2026-02-08T10:00:00.000Z", uptime: "1h", handledMessages: 5 };
 
-    const server = await startTaskRpcServer({
+    const server = await startJobRpcServer({
       socketPath,
       stateStore,
-      retryTaskDelivery: async () => "ok",
+      retryJobDelivery: async () => "ok",
       getStatus: async () => statusData,
     });
 
@@ -154,10 +154,10 @@ describe("TaskRpcServer", () => {
     const stateStore = await StateStore.open(root);
     const socketPath = path.join(root, "runtime", "ambrogio-nostatus.sock");
 
-    const server = await startTaskRpcServer({
+    const server = await startJobRpcServer({
       socketPath,
       stateStore,
-      retryTaskDelivery: async () => "ok",
+      retryJobDelivery: async () => "ok",
     });
 
     const response = await rpcCall(socketPath, { op: "status.get" });
@@ -174,20 +174,20 @@ describe("TaskRpcServer", () => {
 
     const stateStore = await StateStore.open(root);
     const socketPath = path.join(root, "runtime", "ambrogio.sock");
-    const server = await startTaskRpcServer({
+    const server = await startJobRpcServer({
       socketPath,
       stateStore,
-      retryTaskDelivery: async () => "ok",
+      retryJobDelivery: async () => "ok",
     });
 
-    const badOp = await rpcCall(socketPath, { op: "tasks.unknown", args: {} });
+    const badOp = await rpcCall(socketPath, { op: "jobs.unknown", args: {} });
     expect(badOp).toEqual({
       ok: false,
-      error: { code: "BAD_REQUEST", message: "Unknown operation: tasks.unknown" },
+      error: { code: "BAD_REQUEST", message: "Unknown operation: jobs.unknown" },
     });
 
     const badTime = await rpcCall(socketPath, {
-      op: "tasks.create",
+      op: "jobs.create",
       args: {
         runAtIso: "2020-01-01T00:00:00.000Z",
         prompt: "late",
@@ -200,10 +200,10 @@ describe("TaskRpcServer", () => {
       error: { code: "INVALID_TIME", message: "runAtIso must be a future ISO timestamp." },
     });
 
-    const notFound = await rpcCall(socketPath, { op: "tasks.inspect", args: { taskId: "missing" } });
+    const notFound = await rpcCall(socketPath, { op: "jobs.inspect", args: { taskId: "missing" } });
     expect(notFound).toEqual({
       ok: false,
-      error: { code: "NOT_FOUND", message: "Task non trovato: missing" },
+      error: { code: "NOT_FOUND", message: "Job non trovato: missing" },
     });
 
     await server.close();
@@ -224,10 +224,10 @@ describe("TaskRpcServer", () => {
     const stateStore = await StateStore.open(root);
     const socketPath = path.join(root, "runtime", "ambrogio-media.sock");
     const calls: Array<{ method: string; chatId: number; fileName: string }> = [];
-    const server = await startTaskRpcServer({
+    const server = await startJobRpcServer({
       socketPath,
       stateStore,
-      retryTaskDelivery: async () => "ok",
+      retryJobDelivery: async () => "ok",
       media: {
         dataRootRealPath,
         getAuthorizedChatId: () => 99,
@@ -337,10 +337,10 @@ describe("TaskRpcServer", () => {
 
     const stateStore = await StateStore.open(root);
     const socketPath = path.join(root, "runtime", "ambrogio.sock");
-    const server = await startTaskRpcServer({
+    const server = await startJobRpcServer({
       socketPath,
       stateStore,
-      retryTaskDelivery: async () => "ok",
+      retryJobDelivery: async () => "ok",
     });
 
     // Test state.set
@@ -442,10 +442,10 @@ describe("TaskRpcServer", () => {
 
     const stateStore = await StateStore.open(root);
     const socketPath = path.join(root, "runtime", "ambrogio.sock");
-    const server = await startTaskRpcServer({
+    const server = await startJobRpcServer({
       socketPath,
       stateStore,
-      retryTaskDelivery: async () => "ok",
+      retryJobDelivery: async () => "ok",
     });
 
     const userId = 123;

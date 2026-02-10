@@ -27,10 +27,10 @@ type RpcResponse =
   | { ok: true; result: unknown }
   | { ok: false; error: RpcError };
 
-type TaskRpcServerOptions = {
+type JobRpcServerOptions = {
   socketPath: string;
   stateStore: StateStore;
-  retryTaskDelivery: (taskId: string) => Promise<string>;
+  retryJobDelivery: (jobId: string) => Promise<string>;
   getStatus?: () => Promise<Record<string, unknown>>;
   telegram?: {
     getAuthorizedChatId: () => number | null;
@@ -49,7 +49,7 @@ type TaskRpcServerOptions = {
   };
 };
 
-type TaskRpcServerHandle = {
+type JobRpcServerHandle = {
   close: () => Promise<void>;
 };
 
@@ -136,44 +136,54 @@ function parseTaggedError(error: unknown): RpcResponse | null {
   return null;
 }
 
-async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions): Promise<RpcResponse> {
-  const op = readString(request.op);
-  if (!op) {
+async function handleRequest(request: RpcRequest, options: JobRpcServerOptions): Promise<RpcResponse> {
+  const rawOp = readString(request.op);
+  if (!rawOp) {
     return rpcError("BAD_REQUEST", "Missing operation.");
   }
+
+  // Backwards compatibility: map old task operations to new job operations
+  const operationAliases: Record<string, string> = {
+    "tasks.list": "jobs.list",
+    "tasks.inspect": "jobs.inspect",
+    "tasks.create": "jobs.create",
+    "tasks.cancel": "jobs.cancel",
+    "tasks.retry": "jobs.retry",
+  };
+  const op = operationAliases[rawOp] || rawOp;
   const args = request.args ?? {};
 
-  if (op === "tasks.list") {
+  if (op === "jobs.list") {
     const limitRaw = readNumber(args.limit);
     const limit = limitRaw && limitRaw > 0 ? Math.floor(limitRaw) : 20;
-    const active = options.stateStore.getActiveBackgroundTasks(limit);
+    const active = options.stateStore.getActiveBackgroundJobs(limit);
     const statusFilter = Array.isArray(args.status)
       ? args.status.filter((item): item is string => typeof item === "string")
       : [];
-    const tasks = (statusFilter.length > 0 ? active.filter((task) => statusFilter.includes(task.status)) : active).map((task) => ({
-      taskId: task.taskId,
-      kind: task.kind,
-      status: task.status,
-      createdAt: task.createdAt,
-      runAt: task.runAt,
-      requestPreview: task.requestPreview,
+    const jobs = (statusFilter.length > 0 ? active.filter((job) => statusFilter.includes(job.status)) : active).map((job) => ({
+      taskId: job.taskId,
+      kind: job.kind,
+      status: job.status,
+      createdAt: job.createdAt,
+      runAt: job.runAt,
+      requestPreview: job.requestPreview,
     }));
-    return rpcOk({ tasks });
+    return rpcOk({ tasks: jobs }); // Keep "tasks" key for backwards compatibility
   }
 
-  if (op === "tasks.inspect") {
-    const taskId = readString(args.taskId);
-    if (!taskId) {
+  if (op === "jobs.inspect") {
+    const jobId = readString(args.taskId);
+    if (!jobId) {
       return rpcError("BAD_REQUEST", "taskId is required.");
     }
-    const task = options.stateStore.getBackgroundTask(taskId);
-    if (!task) {
-      return rpcError("NOT_FOUND", `Task non trovato: ${taskId}`);
+    const job = options.stateStore.getBackgroundJob(jobId);
+    if (!job) {
+      return rpcError("NOT_FOUND", `Job non trovato: ${jobId}`);
     }
-    return rpcOk(task);
+    return rpcOk(job);
   }
 
-  if (op === "tasks.create") {
+  if (op === "jobs.create") {
     const runAtIso = readString(args.runAtIso);
     const prompt = readString(args.prompt);
     const userId = readNumber(args.userId);
@@ -185,10 +195,10 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
     if (Number.isNaN(runAtMs) || runAtMs <= Date.now()) {
       return rpcError("INVALID_TIME", "runAtIso must be a future ISO timestamp.");
     }
-    const taskId = `dl-rpc-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+    const jobId = `dl-rpc-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
     const requestPreview = readString(args.requestPreview) ?? prompt;
-    options.stateStore.createScheduledTask({
-      taskId,
+    options.stateStore.createScheduledJob({
+      jobId,
       updateId: 0,
       userId,
       chatId,
@@ -197,38 +207,38 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
       requestPreview,
       runAt: runAtIso,
     });
-    return rpcOk({ taskId, status: "scheduled", runAtIso: new Date(runAtMs).toISOString() });
+    return rpcOk({ taskId: jobId, status: "scheduled", runAtIso: new Date(runAtMs).toISOString() });
   }
 
-  if (op === "tasks.cancel") {
-    const taskId = readString(args.taskId);
-    if (!taskId) {
+  if (op === "jobs.cancel") {
+    const jobId = readString(args.taskId);
+    if (!jobId) {
       return rpcError("BAD_REQUEST", "taskId is required.");
     }
-    const result = options.stateStore.cancelTask(taskId);
+    const result = options.stateStore.cancelJob(jobId);
     if (result === "not_found") {
-      return rpcError("NOT_FOUND", `Task non trovato: ${taskId}`);
+      return rpcError("NOT_FOUND", `Job non trovato: ${jobId}`);
     }
     if (result === "already_done") {
-      return rpcError("INVALID_STATE", `Task ${taskId} non cancellabile (gia completato/fallito).`);
+      return rpcError("INVALID_STATE", `Job ${jobId} non cancellabile (gia completato/fallito).`);
     }
-    return rpcOk({ status: "canceled", taskId });
+    return rpcOk({ status: "canceled", taskId: jobId });
   }
 
-  if (op === "tasks.retry") {
-    const taskId = readString(args.taskId);
-    if (!taskId) {
+  if (op === "jobs.retry") {
+    const jobId = readString(args.taskId);
+    if (!jobId) {
       return rpcError("BAD_REQUEST", "taskId is required.");
     }
-    const task = options.stateStore.getBackgroundTask(taskId);
-    if (!task) {
-      return rpcError("NOT_FOUND", `Task non trovato: ${taskId}`);
+    const job = options.stateStore.getBackgroundJob(jobId);
+    if (!job) {
+      return rpcError("NOT_FOUND", `Job non trovato: ${jobId}`);
     }
-    if (!["completed_pending_delivery", "failed_pending_delivery"].includes(task.status)) {
-      return rpcError("INVALID_STATE", `Task ${taskId} non ritentabile nello stato ${task.status}.`);
+    if (!["completed_pending_delivery", "failed_pending_delivery"].includes(job.status)) {
+      return rpcError("INVALID_STATE", `Job ${jobId} non ritentabile nello stato ${job.status}.`);
     }
-    const message = await options.retryTaskDelivery(taskId);
-    return rpcOk({ taskId, message });
+    const message = await options.retryJobDelivery(jobId);
+    return rpcOk({ taskId: jobId, message });
   }
 
   // Recurring jobs operations
@@ -255,11 +265,11 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
 
     const maxRuns = readNumber(args.maxRuns) ?? undefined;
 
-    const taskId = `rc-rpc-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+    const jobId = `rc-rpc-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
     const requestPreview = readString(args.requestPreview) ?? prompt;
 
     options.stateStore.createRecurringJob({
-      taskId,
+      jobId,
       updateId: 0,
       userId,
       chatId,
@@ -273,7 +283,7 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
     });
 
     return rpcOk({
-      taskId,
+      taskId: jobId,
       kind: "recurring",
       status: "scheduled",
       runAtIso: new Date(runAtMs).toISOString(),
@@ -283,47 +293,47 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
   }
 
   if (op === "jobs.pause") {
-    const taskId = readString(args.taskId);
-    if (!taskId) {
+    const jobId = readString(args.taskId);
+    if (!jobId) {
       return rpcError("BAD_REQUEST", "taskId is required.");
     }
 
-    const task = options.stateStore.getBackgroundTask(taskId);
-    if (!task) {
-      return rpcError("NOT_FOUND", `Job non trovato: ${taskId}`);
+    const job = options.stateStore.getBackgroundJob(jobId);
+    if (!job) {
+      return rpcError("NOT_FOUND", `Job non trovato: ${jobId}`);
     }
-    if (task.kind !== "recurring") {
-      return rpcError("INVALID_STATE", `Job ${taskId} non è recurring (kind: ${task.kind}).`);
+    if (job.kind !== "recurring") {
+      return rpcError("INVALID_STATE", `Job ${jobId} non è recurring (kind: ${job.kind}).`);
     }
 
-    const success = options.stateStore.pauseRecurringJob(taskId);
+    const success = options.stateStore.pauseRecurringJob(jobId);
     if (!success) {
-      return rpcError("INTERNAL", `Failed to pause job ${taskId}.`);
+      return rpcError("INTERNAL", `Failed to pause job ${jobId}.`);
     }
 
-    return rpcOk({ status: "paused", taskId });
+    return rpcOk({ status: "paused", taskId: jobId });
   }
 
   if (op === "jobs.resume") {
-    const taskId = readString(args.taskId);
-    if (!taskId) {
+    const jobId = readString(args.taskId);
+    if (!jobId) {
       return rpcError("BAD_REQUEST", "taskId is required.");
     }
 
-    const task = options.stateStore.getBackgroundTask(taskId);
-    if (!task) {
-      return rpcError("NOT_FOUND", `Job non trovato: ${taskId}`);
+    const job = options.stateStore.getBackgroundJob(jobId);
+    if (!job) {
+      return rpcError("NOT_FOUND", `Job non trovato: ${jobId}`);
     }
-    if (task.kind !== "recurring") {
-      return rpcError("INVALID_STATE", `Job ${taskId} non è recurring (kind: ${task.kind}).`);
+    if (job.kind !== "recurring") {
+      return rpcError("INVALID_STATE", `Job ${jobId} non è recurring (kind: ${job.kind}).`);
     }
 
-    const success = options.stateStore.resumeRecurringJob(taskId);
+    const success = options.stateStore.resumeRecurringJob(jobId);
     if (!success) {
-      return rpcError("INTERNAL", `Failed to resume job ${taskId}.`);
+      return rpcError("INTERNAL", `Failed to resume job ${jobId}.`);
     }
 
-    return rpcOk({ status: "resumed", taskId });
+    return rpcOk({ status: "resumed", taskId: jobId });
   }
 
   if (op === "jobs.list-recurring") {
@@ -348,27 +358,27 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
   }
 
   if (op === "jobs.update-recurrence") {
-    const taskId = readString(args.taskId);
+    const jobId = readString(args.taskId);
     const expression = readString(args.expression);
 
-    if (!taskId || !expression) {
+    if (!jobId || !expression) {
       return rpcError("BAD_REQUEST", "taskId and expression are required.");
     }
 
-    const task = options.stateStore.getBackgroundTask(taskId);
-    if (!task) {
-      return rpcError("NOT_FOUND", `Job non trovato: ${taskId}`);
+    const job = options.stateStore.getBackgroundJob(jobId);
+    if (!job) {
+      return rpcError("NOT_FOUND", `Job non trovato: ${jobId}`);
     }
-    if (task.kind !== "recurring") {
-      return rpcError("INVALID_STATE", `Job ${taskId} non è recurring (kind: ${task.kind}).`);
+    if (job.kind !== "recurring") {
+      return rpcError("INVALID_STATE", `Job ${jobId} non è recurring (kind: ${job.kind}).`);
     }
 
-    const success = options.stateStore.updateRecurrenceExpression(taskId, expression);
+    const success = options.stateStore.updateRecurrenceExpression(jobId, expression);
     if (!success) {
-      return rpcError("INTERNAL", `Failed to update recurrence expression for job ${taskId}.`);
+      return rpcError("INTERNAL", `Failed to update recurrence expression for job ${jobId}.`);
     }
 
-    return rpcOk({ taskId, expression });
+    return rpcOk({ taskId: jobId, expression });
   }
 
   if (op === "status.get") {
@@ -547,7 +557,7 @@ async function handleRequest(request: RpcRequest, options: TaskRpcServerOptions)
   return rpcError("BAD_REQUEST", `Unknown operation: ${op}`);
 }
 
-function attachConnection(socket: Socket, options: TaskRpcServerOptions): void {
+function attachConnection(socket: Socket, options: JobRpcServerOptions): void {
   let buffer = "";
   socket.setEncoding("utf8");
   socket.on("data", async (chunk) => {
@@ -580,7 +590,7 @@ function attachConnection(socket: Socket, options: TaskRpcServerOptions): void {
   });
 }
 
-export async function startTaskRpcServer(options: TaskRpcServerOptions): Promise<TaskRpcServerHandle> {
+export async function startJobRpcServer(options: JobRpcServerOptions): Promise<JobRpcServerHandle> {
   await mkdir(path.dirname(options.socketPath), { recursive: true });
   await safeUnlink(options.socketPath);
 
