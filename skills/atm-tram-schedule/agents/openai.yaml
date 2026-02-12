@@ -1,0 +1,4 @@
+interface:
+  display_name: "ATM Tram Schedule"
+  short_description: "Check ATM Milano tram departure times"
+  default_prompt: "Use $atm-tram-schedule to check when the tram arrives."

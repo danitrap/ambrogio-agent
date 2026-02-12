@@ -1,4 +1,0 @@
-interface:
-  display_name: "Screenshot Only"
-  short_description: "Single URL screenshot, no autonomous browsing"
-  default_prompt: "Use $screenshot-only to capture this page as PNG."
