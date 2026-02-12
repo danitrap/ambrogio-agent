@@ -1,3 +1,8 @@
+---
+name: memory-manager
+description: Manages Ambrogio's long-term semantic memory system. Provides tools for capturing, retrieving, and managing semantic memories that persist across sessions.
+---
+
 # memory-manager
 
 Manages Ambrogio's long-term semantic memory system.

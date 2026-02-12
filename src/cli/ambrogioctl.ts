@@ -874,7 +874,8 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
     }
 
     if (action === "sync") {
-      const outputPath = readFlag(args, "--output") ?? "/Users/daniele/Code/agent/data/MEMORY.md";
+      const dataRoot = Bun.env.DATA_ROOT ?? "/data";
+      const outputPath = readFlag(args, "--output") ?? `${dataRoot}/MEMORY.md`;
 
       try {
         // We need to access stateStore directly, so we use a special approach

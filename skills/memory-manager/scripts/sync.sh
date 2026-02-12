@@ -10,7 +10,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 # Use bun to run ambrogioctl
 AMBROGIOCTL="bun run $PROJECT_ROOT/src/cli/ambrogioctl.ts"
 
-OUTPUT="/Users/daniele/Code/agent/data/MEMORY.md"
+OUTPUT="${DATA_ROOT:-/data}/MEMORY.md"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
