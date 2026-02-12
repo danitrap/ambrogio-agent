@@ -3,12 +3,8 @@
 
 set -euo pipefail
 
-# Determine script directory and project root
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-
-# Use bun to run ambrogioctl
-AMBROGIOCTL="bun run $PROJECT_ROOT/src/cli/ambrogioctl.ts"
+# Use ambrogioctl from PATH
+AMBROGIOCTL="ambrogioctl"
 
 ID=""
 TYPE=""
