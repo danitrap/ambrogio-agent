@@ -28,10 +28,47 @@ This file contains persistent instructions for all Codex agent invocations.
 
 - `/data/TODO.md` - Task list
 - `/data/HEARTBEAT.md` - Heartbeat policy and procedures
+- `/data/MEMORY.md` - Long-term semantic memory (preferences, facts, patterns)
 - `/data/groceries.md` - Grocery list
 - `/data/runtime/` - Runtime state (DB, logs, temp files)
 - `/data/generated/` - Generated output (audio, PDFs, screenshots, etc.)
 - `/data/.codex/skills/` - Available skills (auto-discovered by Codex)
+
+## Memory System
+
+Ambrogio maintains long-term semantic memory across sessions in `/data/MEMORY.md` and SQLite.
+
+### Memory Types
+
+1. **Preferences** - User's explicit choices (tools, communication style, workflows)
+   - Example: "usa sempre bun", "parla formale"
+2. **Facts** - Contextual information (credentials, IPs, project details)
+   - Example: "wifi password è guest123"
+3. **Patterns** - Observed behaviors (habits, common mistakes)
+   - Example: "tende a dimenticare i commit"
+
+### When to Consult Memory
+
+**ALWAYS check memory when:**
+- Suggesting tools/libraries → verify user preferences
+- Providing credentials/IPs → check stored facts
+- User asks "cosa ricordi?" or "le mie preferenze?" → load memory-manager skill
+- Starting a new task → quickly scan MEMORY.md for relevant context
+
+**How to access:**
+- Quick check: `cat /data/MEMORY.md` (human-readable)
+- Structured query: Load `memory-manager` skill, use `memory search --query "..."`
+- Full list: `ambrogioctl memory list --type preference`
+
+### Capturing Memory
+
+**Explicit capture:**
+- User says "ricorda che X" → load memory-manager skill
+- Use: `memory add --type <preference|fact|pattern> --content "X"`
+
+**Viewing/Editing:**
+- Read: `cat /data/MEMORY.md`
+- Edit: User can edit file directly, then `ambrogioctl memory sync` to update DB
 
 ## Best Practices
 

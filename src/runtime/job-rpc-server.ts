@@ -554,6 +554,101 @@ async function handleRequest(request: RpcRequest, options: JobRpcServerOptions):
     return rpcOk({ ...stats, userId });
   }
 
+  // Memory operations
+  if (op === "memory.add") {
+    const id = readString(args.id);
+    const type = readString(args.type);
+    const data = readString(args.data);
+    if (!id || !type || !data) {
+      return rpcError("BAD_REQUEST", "id, type, and data are required.");
+    }
+    if (type !== "preference" && type !== "fact" && type !== "pattern") {
+      return rpcError("BAD_REQUEST", "type must be 'preference', 'fact', or 'pattern'.");
+    }
+    options.stateStore.setRuntimeValue(`memory:${type}:${id}`, data);
+    return rpcOk({ memoryId: id, type });
+  }
+
+  if (op === "memory.get") {
+    const id = readString(args.id);
+    const type = readString(args.type);
+    if (!id || !type) {
+      return rpcError("BAD_REQUEST", "id and type are required.");
+    }
+    const value = options.stateStore.getRuntimeValue(`memory:${type}:${id}`);
+    if (value === null) {
+      return rpcError("NOT_FOUND", `Memory not found: ${type}:${id}`);
+    }
+    return rpcOk({ id, type, data: value });
+  }
+
+  if (op === "memory.list") {
+    const type = readString(args.type) ?? undefined;
+    const pattern = type ? `memory:${type}:*` : "memory:*";
+    const entries = options.stateStore.getAllRuntimeKeys(pattern);
+    const memories = entries.map((entry) => {
+      const parts = entry.key.split(":");
+      return {
+        id: parts[2] ?? "",
+        type: parts[1] ?? "",
+        data: entry.value,
+        updatedAt: entry.updatedAt,
+      };
+    });
+    return rpcOk({ memories });
+  }
+
+  if (op === "memory.search") {
+    const query = readString(args.query);
+    if (!query) {
+      return rpcError("BAD_REQUEST", "query is required.");
+    }
+    const entries = options.stateStore.getAllRuntimeKeys("memory:*");
+    const lowerQuery = query.toLowerCase();
+    const matches = entries
+      .filter((entry) => {
+        try {
+          const memoryData = JSON.parse(entry.value);
+          const content = (memoryData.content ?? "").toLowerCase();
+          const tags = Array.isArray(memoryData.tags) ? memoryData.tags.join(" ").toLowerCase() : "";
+          return content.includes(lowerQuery) || tags.includes(lowerQuery);
+        } catch {
+          return false;
+        }
+      })
+      .map((entry) => {
+        const parts = entry.key.split(":");
+        return {
+          id: parts[2] ?? "",
+          type: parts[1] ?? "",
+          data: entry.value,
+          updatedAt: entry.updatedAt,
+        };
+      });
+    return rpcOk({ matches, query });
+  }
+
+  if (op === "memory.delete") {
+    const id = readString(args.id);
+    const type = readString(args.type);
+    if (!id || !type) {
+      return rpcError("BAD_REQUEST", "id and type are required.");
+    }
+    const key = `memory:${type}:${id}`;
+    const exists = options.stateStore.getRuntimeValue(key);
+    if (exists === null) {
+      return rpcError("NOT_FOUND", `Memory not found: ${type}:${id}`);
+    }
+    options.stateStore.clearRuntimeValues([key]);
+    return rpcOk({ deleted: true, id, type });
+  }
+
+  if (op === "memory.sync") {
+    // This operation will be handled by CLI script that generates MEMORY.md
+    // RPC just confirms the operation is available
+    return rpcOk({ synced: true, message: "Use memory sync command to regenerate MEMORY.md" });
+  }
+
   return rpcError("BAD_REQUEST", `Unknown operation: ${op}`);
 }
 

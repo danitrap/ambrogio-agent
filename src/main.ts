@@ -963,7 +963,7 @@ async function main(): Promise<void> {
             return relativePath;
           },
           runHeartbeatNow: async () => {
-            await flushPendingBackgroundTasks();
+            await flushPendingBackgroundJobs();
             const outcome = await heartbeatRunner.runScheduledHeartbeat("manual");
             if (outcome.status === "skipped_inflight") {
               return "Heartbeat gia in esecuzione.";

@@ -664,10 +664,330 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
   if (scope === "tasks") {
     stderr("Warning: 'tasks' scope is deprecated. Use 'jobs' instead.");
     // Recursively call with "jobs" scope instead
-    return await runAmbrogioCtl(["jobs", action, ...args], deps);
+    return await runAmbrogioCtl(["jobs", action ?? "", ...args], deps);
   }
 
-  stderr("Usage: ambrogioctl <jobs|tasks|status|telegram|state|conversation> [options]");
+  if (scope === "memory") {
+    if (!action) {
+      stderr("Usage: ambrogioctl memory <add|get|list|search|delete|sync> [options]");
+      return 2;
+    }
+
+    const json = hasFlag(args, "--json");
+
+    if (action === "add") {
+      const type = readFlag(args, "--type");
+      const content = readFlag(args, "--content");
+      const source = readFlag(args, "--source") ?? "explicit";
+      const confidence = readFlag(args, "--confidence") ?? "100";
+      const tagsRaw = readFlag(args, "--tags");
+      const tags = tagsRaw ? tagsRaw.split(",").map((tag) => tag.trim()) : [];
+      const contextInfo = readFlag(args, "--context") ?? "";
+
+      if (!type || !content) {
+        stderr("--type and --content are required.");
+        return 2;
+      }
+
+      if (type !== "preference" && type !== "fact" && type !== "pattern") {
+        stderr("--type must be 'preference', 'fact', or 'pattern'.");
+        return 2;
+      }
+
+      const now = new Date().toISOString();
+      const memoryId = `mem-${now.split("T")[0]}-${Math.random().toString(36).slice(2, 9)}`;
+      const memoryData = JSON.stringify({
+        id: memoryId,
+        type,
+        content,
+        source,
+        confidence: parseInt(confidence, 10),
+        createdAt: now,
+        updatedAt: now,
+        lastAccessedAt: now,
+        tags,
+        context: contextInfo,
+        status: "active",
+      });
+
+      try {
+        const response = await sendRpc("memory.add", { id: memoryId, type, data: memoryData });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as { memoryId: string; type: string };
+          stdout(`Memory added: ${result.type}:${result.memoryId}`);
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "get") {
+      const type = readFlag(args, "--type");
+      const id = readFlag(args, "--id");
+      if (!type || !id) {
+        stderr("--type and --id are required.");
+        return 2;
+      }
+
+      try {
+        const response = await sendRpc("memory.get", { id, type });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as { id: string; type: string; data: string };
+          const parsed = JSON.parse(result.data);
+          stdout(`ID: ${result.id}`);
+          stdout(`Type: ${result.type}`);
+          stdout(`Content: ${parsed.content}`);
+          stdout(`Confidence: ${parsed.confidence}`);
+          stdout(`Status: ${parsed.status}`);
+          if (parsed.tags && parsed.tags.length > 0) {
+            stdout(`Tags: ${parsed.tags.join(", ")}`);
+          }
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "list") {
+      const type = readFlag(args, "--type") ?? undefined;
+
+      try {
+        const response = await sendRpc("memory.list", { type });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as {
+            memories: Array<{ id: string; type: string; data: string; updatedAt: string }>;
+          };
+          if (result.memories.length === 0) {
+            stdout("No memories found.");
+          } else {
+            for (const memory of result.memories) {
+              try {
+                const parsed = JSON.parse(memory.data);
+                const preview = parsed.content.length > 60 ? `${parsed.content.slice(0, 57)}...` : parsed.content;
+                stdout(`${memory.type}:${memory.id} | ${preview} | confidence: ${parsed.confidence}`);
+              } catch {
+                stdout(`${memory.type}:${memory.id} | (invalid data)`);
+              }
+            }
+          }
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "search") {
+      const query = readFlag(args, "--query");
+      if (!query) {
+        stderr("--query is required.");
+        return 2;
+      }
+
+      try {
+        const response = await sendRpc("memory.search", { query });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          const result = response.result as {
+            matches: Array<{ id: string; type: string; data: string; updatedAt: string }>;
+            query: string;
+          };
+          if (result.matches.length === 0) {
+            stdout(`No matches found for query: "${result.query}"`);
+          } else {
+            stdout(`Found ${result.matches.length} match(es) for query: "${result.query}"`);
+            for (const match of result.matches) {
+              try {
+                const parsed = JSON.parse(match.data);
+                const preview = parsed.content.length > 60 ? `${parsed.content.slice(0, 57)}...` : parsed.content;
+                stdout(`${match.type}:${match.id} | ${preview}`);
+              } catch {
+                stdout(`${match.type}:${match.id} | (invalid data)`);
+              }
+            }
+          }
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "delete") {
+      const type = readFlag(args, "--type");
+      const id = readFlag(args, "--id");
+      if (!type || !id) {
+        stderr("--type and --id are required.");
+        return 2;
+      }
+
+      try {
+        const response = await sendRpc("memory.delete", { id, type });
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+        } else {
+          stdout(`Memory deleted: ${type}:${id}`);
+        }
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    if (action === "sync") {
+      const outputPath = readFlag(args, "--output") ?? "/Users/daniele/Code/agent/data/MEMORY.md";
+
+      try {
+        // We need to access stateStore directly, so we use a special approach
+        // The RPC server doesn't provide direct access to stateStore for this operation
+        const response = await sendRpc("memory.list", {});
+        if (!response.ok) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+
+        const result = response.result as {
+          memories: Array<{ id: string; type: string; data: string; updatedAt: string }>;
+        };
+
+        // Generate markdown from memories
+        const preferences: Array<{ id: string; data: any }> = [];
+        const facts: Array<{ id: string; data: any }> = [];
+        const patterns: Array<{ id: string; data: any }> = [];
+
+        for (const memory of result.memories) {
+          try {
+            const parsed = JSON.parse(memory.data);
+            if (parsed.status === "archived") continue;
+
+            const memoryObj = { id: memory.id, data: parsed };
+            if (memory.type === "preference") preferences.push(memoryObj);
+            else if (memory.type === "fact") facts.push(memoryObj);
+            else if (memory.type === "pattern") patterns.push(memoryObj);
+          } catch {
+            continue;
+          }
+        }
+
+        // Sort by confidence and date
+        const sortMemories = (a: any, b: any) => {
+          const confA = a.data.confidence ?? 0;
+          const confB = b.data.confidence ?? 0;
+          if (confA !== confB) return confB - confA;
+          return new Date(b.data.createdAt).getTime() - new Date(a.data.createdAt).getTime();
+        };
+
+        preferences.sort(sortMemories);
+        facts.sort(sortMemories);
+        patterns.sort(sortMemories);
+
+        const lines: string[] = [
+          "# Ambrogio Agent - Memory",
+          "",
+          "This file contains Ambrogio's long-term semantic memory across sessions.",
+          "",
+          "**Memory Types:**",
+          "- **Preferences**: User's explicit choices (tools, communication style, workflows)",
+          "- **Facts**: Contextual information (credentials, IPs, project details)",
+          "- **Patterns**: Observed behaviors (habits, common mistakes)",
+          "",
+          "---",
+          "",
+        ];
+
+        const formatSection = (memories: Array<{ id: string; data: any }>, title: string) => {
+          if (memories.length === 0) return;
+
+          lines.push(`## ${title}`, "");
+          for (const memory of memories) {
+            const m = memory.data;
+            lines.push(`### ${m.content}`, "");
+            lines.push(`- **ID**: \`${m.id}\``);
+            lines.push(`- **Confidence**: ${m.confidence}%`);
+            lines.push(`- **Source**: ${m.source}`);
+            lines.push(`- **Created**: ${new Date(m.createdAt).toLocaleDateString()}`);
+            lines.push(`- **Last Updated**: ${new Date(m.updatedAt).toLocaleDateString()}`);
+            if (m.tags && m.tags.length > 0) {
+              lines.push(`- **Tags**: ${m.tags.map((t: string) => `\`${t}\``).join(", ")}`);
+            }
+            if (m.context) {
+              lines.push(`- **Context**: ${m.context}`);
+            }
+            if (m.status !== "active") {
+              lines.push(`- **Status**: ${m.status}`);
+            }
+            lines.push("");
+          }
+        };
+
+        formatSection(preferences, "User Preferences");
+        formatSection(facts, "Facts & Knowledge");
+        formatSection(patterns, "Behavioral Patterns");
+
+        if (preferences.length === 0 && facts.length === 0 && patterns.length === 0) {
+          lines.push("## No Memories Yet", "");
+          lines.push("Use `ambrogioctl memory add` to create memories, or use the `memory-manager` skill.", "");
+        }
+
+        const markdown = lines.join("\n");
+
+        // Write to file
+        await Bun.write(outputPath, markdown);
+
+        stdout(`MEMORY.md synced successfully to: ${outputPath}`);
+        stdout(`Total memories: ${result.memories.length}`);
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    }
+
+    stderr(`Unknown action: ${action}`);
+    return 2;
+  }
+
+  stderr("Usage: ambrogioctl <jobs|tasks|status|telegram|state|conversation|memory> [options]");
   return 2;
 }
 
