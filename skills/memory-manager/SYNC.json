@@ -1,0 +1,7 @@
+{
+  "version": "1",
+  "outputFile": "/data/MEMORY.md",
+  "patterns": ["memory:*"],
+  "generator": "./scripts/sync.sh",
+  "description": "Syncs semantic memory to human-readable file"
+}

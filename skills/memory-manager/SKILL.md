@@ -78,6 +78,10 @@ Lists all memories, optionally filtered by type.
 ### Sync Memory
 
 ```bash
+# New way (recommended)
+ambrogioctl sync generate --skill memory-manager
+
+# Old way (still works)
 ./scripts/sync.sh
 ```
 

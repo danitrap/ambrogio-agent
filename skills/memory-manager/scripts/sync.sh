@@ -6,8 +6,10 @@ set -euo pipefail
 # Use ambrogioctl from PATH
 AMBROGIOCTL="ambrogioctl"
 
-OUTPUT="${DATA_ROOT:-/data}/MEMORY.md"
+# Use environment variable if set (new way), otherwise use default (old way)
+OUTPUT="${SYNC_OUTPUT_FILE:-${DATA_ROOT:-/data}/MEMORY.md}"
 
+# Parse command line args for backward compatibility
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --output)
