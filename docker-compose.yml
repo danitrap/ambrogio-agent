@@ -26,6 +26,7 @@ services:
     environment:
       - DATA_ROOT=/data
       - CODEX_HOME=/data/.codex
+      - CLAUDE_HOME=/data/.claude
       - HOME=/data
       - TZ=${TZ:-Europe/Rome}
       - PROJECT_SKILLS_ROOT=/app/skills
