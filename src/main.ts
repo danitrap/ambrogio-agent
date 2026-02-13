@@ -6,7 +6,7 @@ import { AmbrogioAgentService } from "./app/ambrogio-agent-service";
 import { loadConfig } from "./config/env";
 import { Logger } from "./logging/audit";
 import { correlationFields } from "./logging/correlation";
-import { ExecBridge } from "./model/exec-bridge";
+import { createModelBridge } from "./model/bridge-factory";
 import { ElevenLabsTts } from "./model/elevenlabs-tts";
 import { OpenAiTranscriber } from "./model/openai-transcriber";
 import { handleTelegramCommand } from "./runtime/command-handlers";
@@ -212,10 +212,12 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const logger = new Logger(config.logLevel);
   const codexHome = Bun.env.CODEX_HOME ?? `${config.dataRoot}/.codex`;
+  const claudeHome = Bun.env.CLAUDE_HOME ?? `${config.dataRoot}/.claude`;
   const homeDir = Bun.env.HOME ?? config.dataRoot;
 
   await mkdir(homeDir, { recursive: true });
   await mkdir(codexHome, { recursive: true });
+  await mkdir(claudeHome, { recursive: true });
   await mkdir(path.join(config.dataRoot, GENERATED_SCANNED_PDFS_RELATIVE_DIR), { recursive: true });
 
   const telegram = new TelegramAdapter(config.telegramBotToken);
@@ -256,14 +258,25 @@ async function main(): Promise<void> {
       skipped: agentsBootstrapResult.skipped,
     });
   }
-  const modelBridge = new ExecBridge(config.codexCommand, config.codexArgs, logger, {
-    cwd: config.dataRoot,
-    env: {
-      CODEX_HOME: codexHome,
-      HOME: homeDir,
-      NO_COLOR: Bun.env.NO_COLOR ?? "1",
+  const modelBridge = createModelBridge(
+    config.backend,
+    {
+      codexCommand: config.codexCommand,
+      codexArgs: config.codexArgs,
+      claudeCommand: config.claudeCommand,
+      claudeArgs: config.claudeArgs,
+      options: {
+        cwd: config.dataRoot,
+        env: {
+          CODEX_HOME: codexHome,
+          CLAUDE_HOME: claudeHome,
+          HOME: homeDir,
+          NO_COLOR: Bun.env.NO_COLOR ?? "1",
+        },
+      },
     },
-  });
+    logger,
+  );
   const transcriber = new OpenAiTranscriber(config.openaiApiKey);
   const attachmentService = new AttachmentService(config.dataRoot, MAX_INLINE_ATTACHMENT_TEXT_BYTES);
   const tts = config.elevenLabsApiKey ? new ElevenLabsTts(config.elevenLabsApiKey) : null;
