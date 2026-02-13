@@ -243,4 +243,29 @@ describe("StateStore", () => {
     expect(job?.mutedUntil).toBeNull();
     store.close();
   });
+
+  test("should mark job as skipped_muted", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "state-store-"));
+    tempDirs.push(root);
+
+    const store = await StateStore.open(root);
+    const taskId = "dl-skip-test-1";
+    const runAt = new Date(Date.now() + 3600000).toISOString();
+
+    store.createDelayedJob({
+      jobId: taskId,
+      updateId: 1,
+      userId: 123,
+      chatId: 123,
+      prompt: "Test skip",
+      requestPreview: "Test skip",
+      runAt,
+    });
+
+    store.markJobSkippedMuted(taskId);
+
+    const job = store.getBackgroundJob(taskId);
+    expect(job?.status).toBe("skipped_muted");
+    store.close();
+  });
 });

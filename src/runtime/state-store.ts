@@ -12,7 +12,8 @@ export type JobStatus =
   | "completed_delivered"
   | "failed_pending_delivery"
   | "failed_delivered"
-  | "canceled";
+  | "canceled"
+  | "skipped_muted";
 export type JobKind = "background" | "delayed" | "recurring";
 export type RecurrenceType = "interval" | "cron" | null;
 export type JobEntry = {
@@ -620,6 +621,15 @@ export class StateStore {
          AND status IN ('completed_pending_delivery', 'failed_pending_delivery')`,
       [jobId, now],
     );
+  }
+
+  markJobSkippedMuted(taskId: string): boolean {
+    const result = this.db.run(
+      `UPDATE jobs SET status = ?, completed_at = ?
+       WHERE task_id = ? AND status IN ('scheduled', 'running')`,
+      ["skipped_muted", new Date().toISOString(), taskId],
+    );
+    return (result.changes ?? 0) > 0;
   }
 
   getPendingBackgroundJobs(limit = 20): JobEntry[] {
