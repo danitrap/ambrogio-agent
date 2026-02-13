@@ -1,5 +1,5 @@
 import { createConnection } from "node:net";
-import { discoverSyncSkills, type SyncSkill } from "./sync-manifest";
+import { discoverSyncSkills, executeGenerator, type SyncSkill } from "./sync-manifest";
 
 type RpcError = { code: string; message: string };
 type RpcResponse = { ok: true; result: unknown } | { ok: false; error: RpcError };
@@ -1063,6 +1063,68 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
         return 0;
       } catch (error) {
         stderr(`Validation error: ${error}`);
+        return 10;
+      }
+    }
+
+    if (action === "generate") {
+      const skillName = readFlag(args, "--skill");
+      const all = hasFlag(args, "--all");
+
+      if (!skillName && !all) {
+        stderr("Either --skill or --all is required for generate");
+        return 2;
+      }
+
+      try {
+        const skills = await discoverSyncSkills(skillsDirs);
+
+        const toGenerate = all
+          ? skills
+          : skills.filter((s) => s.name === skillName);
+
+        if (!all && toGenerate.length === 0) {
+          stderr(`Skill '${skillName}' not found or has no SYNC.json`);
+          return 3;
+        }
+
+        let hasErrors = false;
+        const results: Array<{ skill: string; success: boolean; message: string }> =
+          [];
+
+        for (const skill of toGenerate) {
+          stdout(`Generating ${skill.name}...`);
+          const result = await executeGenerator(skill);
+
+          if (result.success) {
+            stdout(result.stdout);
+            results.push({
+              skill: skill.name,
+              success: true,
+              message: `Synced to ${skill.manifest.outputFile}`,
+            });
+          } else {
+            hasErrors = true;
+            stderr(
+              `Failed to generate ${skill.name}: ${result.error ?? `exit code ${result.exitCode}`}`,
+            );
+            if (result.stderr) stderr(result.stderr);
+            results.push({
+              skill: skill.name,
+              success: false,
+              message: result.error ?? `Exit code ${result.exitCode}`,
+            });
+          }
+        }
+
+        if (json) {
+          stdout(JSON.stringify({ results }));
+        }
+
+        // For --all, succeed even if some failed (report them but don't error)
+        return all ? 0 : hasErrors ? 4 : 0;
+      } catch (error) {
+        stderr(`Error generating sync files: ${error}`);
         return 10;
       }
     }
