@@ -122,6 +122,31 @@ Long operations automatically move to background after 60s timeout without killi
 - "Riprendi il job rc-..."
 - "Cancella il job weather"
 
+### Muted Reminders
+
+Temporarily mute jobs to prevent notifications until a specified time. Useful when you're already doing what the reminder was for (e.g., "I'm on the tram, stop alerting me").
+
+**Mute operations:**
+
+- `ambrogioctl jobs mute --id <jobId> --until <ISO timestamp>` - Mute specific job
+- `ambrogioctl jobs mute-pattern --pattern <text> --until <ISO timestamp>` - Mute jobs matching pattern
+- `ambrogioctl jobs unmute --id <jobId>` - Unmute job
+- `ambrogioctl jobs list-muted [--limit N]` - List currently muted jobs
+
+**Natural language:**
+
+- "I'm on the tram" → Mutes tram-related reminders until tomorrow morning
+- "Stop bothering me about weather" → Mutes weather jobs
+- "Show muted jobs" → Lists muted jobs
+- "Unmute the tram reminders" → Clears mute on tram jobs
+
+**Behavior:**
+
+- One-shot jobs: Marked as `skipped_muted` when muted, never delivered
+- Recurring jobs: Continue scheduling but skip execution until unmuted
+- Jobs automatically unmute when `muted_until` time passes
+- All job deliveries include "⏰ [Background Job]" prefix
+
 When runtime jobs and TODO intents are ambiguous, the ambrogio-agent asks explicit confirmation before executing.
 
 Legacy commands (`/tasks`, `/task <id>`, `/retrytask <id>`, `/canceltask <id>`) remain available for debugging.
