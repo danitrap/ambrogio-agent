@@ -119,6 +119,18 @@ done
 - Titolo breve + timestamp.
 - Tag obbligatorio per area (es. `ops`, `legal`, `sales`).
 
+## Sync Notes to Markdown
+
+```bash
+# Generate consolidated view of all notes
+ambrogioctl sync generate --skill structured-notes
+
+# View the generated file
+cat /data/NOTES.md
+```
+
+Generates `/data/NOTES.md` with all structured notes organized by type (project, decision, log) with metadata and tags.
+
 ## Output atteso verso l'utente
 
 - Conferma azione (creata/aggiornata/trovata).

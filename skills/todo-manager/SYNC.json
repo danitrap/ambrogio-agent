@@ -1,0 +1,7 @@
+{
+  "version": "1",
+  "outputFile": "/data/TODO_ANALYTICS.md",
+  "patterns": ["todo:meta:*"],
+  "generator": "./scripts/sync.sh",
+  "description": "Syncs TODO metadata and analytics to markdown report"
+}

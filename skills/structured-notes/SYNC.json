@@ -1,0 +1,7 @@
+{
+  "version": "1",
+  "outputFile": "/data/NOTES.md",
+  "patterns": ["notes:entry:*"],
+  "generator": "./scripts/sync.sh",
+  "description": "Syncs structured notes to consolidated markdown view"
+}
