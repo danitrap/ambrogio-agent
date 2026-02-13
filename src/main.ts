@@ -418,11 +418,47 @@ async function main(): Promise<void> {
     if (!stateStore.claimScheduledJob(job.taskId)) {
       return;
     }
+
+    // Check if job is muted
+    if (job.mutedUntil) {
+      const mutedUntilDate = new Date(job.mutedUntil);
+      const now = new Date();
+
+      if (mutedUntilDate > now) {
+        // Job is currently muted - skip execution
+        logger.info("job_skipped_muted", {
+          jobId: job.taskId,
+          kind: job.kind,
+          mutedUntil: job.mutedUntil,
+        });
+
+        if (job.kind === "delayed") {
+          // One-shot: mark as skipped_muted
+          stateStore.markJobSkippedMuted(job.taskId);
+        } else if (job.kind === "recurring") {
+          // Recurring: increment run count and schedule next run
+          const deliveryText = `[Skipped: muted until ${mutedUntilDate.toLocaleString()}]`;
+          const rescheduled = stateStore.rescheduleRecurringJob(
+            job.taskId,
+            deliveryText,
+          );
+          if (!rescheduled) {
+            // Max runs reached - mark completed
+            stateStore.markBackgroundJobCompleted(job.taskId, deliveryText);
+          }
+        }
+        return; // Skip execution
+      }
+    }
+
     const prompt = job.payloadPrompt ?? job.requestPreview;
     const isRecurring = job.kind === "recurring";
 
+    // Prepend background job prefix to prompt
+    const prefixedPrompt = `⏰ [Background Job]\n\n${prompt}`;
+
     try {
-      const reply = await ambrogioAgent.handleMessage(job.userId, prompt, `delayed-${job.taskId}`);
+      const reply = await ambrogioAgent.handleMessage(job.userId, prefixedPrompt, `delayed-${job.taskId}`);
 
       if (isRecurring) {
         // For recurring jobs: reschedule before delivery
