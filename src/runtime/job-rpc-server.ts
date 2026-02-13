@@ -381,6 +381,84 @@ async function handleRequest(request: RpcRequest, options: JobRpcServerOptions):
     return rpcOk({ taskId: jobId, expression });
   }
 
+  if (op === "jobs.mute") {
+    const jobId = readString(args.id);
+    const mutedUntil = readString(args.until);
+
+    if (!jobId) {
+      return rpcError("BAD_REQUEST", "id is required.");
+    }
+    if (!mutedUntil) {
+      return rpcError("BAD_REQUEST", "until is required.");
+    }
+
+    // Validate ISO timestamp
+    const date = new Date(mutedUntil);
+    if (Number.isNaN(date.getTime())) {
+      return rpcError("INVALID_TIME", "until must be a valid ISO 8601 timestamp.");
+    }
+
+    const success = options.stateStore.muteJob(jobId, mutedUntil);
+    if (!success) {
+      return rpcError("NOT_FOUND", `Job non trovato: ${jobId}`);
+    }
+
+    return rpcOk({ jobId, mutedUntil });
+  }
+
+  if (op === "jobs.unmute") {
+    const jobId = readString(args.id);
+
+    if (!jobId) {
+      return rpcError("BAD_REQUEST", "id is required.");
+    }
+
+    const success = options.stateStore.unmuteJob(jobId);
+    if (!success) {
+      return rpcError("NOT_FOUND", `Job non trovato: ${jobId}`);
+    }
+
+    return rpcOk({ jobId });
+  }
+
+  if (op === "jobs.mute-pattern") {
+    const pattern = readString(args.pattern);
+    const mutedUntil = readString(args.until);
+
+    if (!pattern) {
+      return rpcError("BAD_REQUEST", "pattern is required.");
+    }
+    if (!mutedUntil) {
+      return rpcError("BAD_REQUEST", "until is required.");
+    }
+
+    // Validate ISO timestamp
+    const date = new Date(mutedUntil);
+    if (Number.isNaN(date.getTime())) {
+      return rpcError("INVALID_TIME", "until must be a valid ISO 8601 timestamp.");
+    }
+
+    const count = options.stateStore.muteJobsByPattern(pattern, mutedUntil);
+    return rpcOk({ pattern, mutedUntil, count });
+  }
+
+  if (op === "jobs.list-muted") {
+    const limit = readNumber(args.limit) ?? 50;
+    const jobs = options.stateStore.getMutedJobs(limit);
+
+    return rpcOk({
+      jobs: jobs.map((job) => ({
+        id: job.taskId,
+        kind: job.kind,
+        prompt: job.payloadPrompt ?? job.requestPreview,
+        runAt: job.runAt,
+        mutedUntil: job.mutedUntil,
+        status: job.status,
+        recurrenceExpression: job.recurrenceExpression,
+      })),
+    });
+  }
+
   if (op === "status.get") {
     if (!options.getStatus) {
       return rpcError("BAD_REQUEST", "Status not available.");
