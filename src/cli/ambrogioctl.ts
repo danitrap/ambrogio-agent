@@ -101,6 +101,34 @@ function formatResult(op: string, result: unknown): string {
       return `${job.taskId} | ${job.recurrenceExpression} | ${enabled} | runs: ${runs} | next: ${job.nextRunAt} | ${job.requestPreview.slice(0, 60)}`;
     }).join("\n");
   }
+  if (op === "jobs.mute") {
+    const data = result as { jobId?: string; mutedUntil?: string };
+    return `Job ${data.jobId} muted until ${data.mutedUntil}`;
+  }
+  if (op === "jobs.unmute") {
+    const data = result as { jobId?: string };
+    return `Job ${data.jobId} unmuted`;
+  }
+  if (op === "jobs.mute-pattern") {
+    const data = result as { pattern?: string; mutedUntil?: string; count?: number };
+    return `Muted ${data.count} job(s) matching "${data.pattern}" until ${data.mutedUntil}`;
+  }
+  if (op === "jobs.list-muted") {
+    const jobs = (result as { jobs?: Array<{
+      id: string;
+      kind: string;
+      prompt: string;
+      mutedUntil: string;
+      recurrenceExpression?: string;
+    }> }).jobs ?? [];
+    if (jobs.length === 0) {
+      return "No muted jobs.";
+    }
+    return jobs.map((job) => {
+      const recurrence = job.recurrenceExpression ? ` (${job.recurrenceExpression})` : "";
+      return `${job.id} [${job.kind}${recurrence}]\n  Prompt: ${job.prompt}\n  Muted until: ${job.mutedUntil}`;
+    }).join("\n\n");
+  }
   if (typeof result === "string") {
     return result;
   }
@@ -638,6 +666,53 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
         userId,
         chatId,
       };
+    } else if (action === "mute") {
+      const id = readFlag(args, "--id");
+      const until = readFlag(args, "--until");
+      if (!id) {
+        stderr("--id is required.");
+        return 2;
+      }
+      if (!until) {
+        stderr("--until is required.");
+        return 2;
+      }
+      payload.id = id;
+      payload.until = until;
+      op = "jobs.mute";
+    } else if (action === "unmute") {
+      const id = readFlag(args, "--id");
+      if (!id) {
+        stderr("--id is required.");
+        return 2;
+      }
+      payload.id = id;
+      op = "jobs.unmute";
+    } else if (action === "mute-pattern") {
+      const pattern = readFlag(args, "--pattern");
+      const until = readFlag(args, "--until");
+      if (!pattern) {
+        stderr("--pattern is required.");
+        return 2;
+      }
+      if (!until) {
+        stderr("--until is required.");
+        return 2;
+      }
+      payload.pattern = pattern;
+      payload.until = until;
+      op = "jobs.mute-pattern";
+    } else if (action === "list-muted") {
+      op = "jobs.list-muted";
+      const limitRaw = readFlag(args, "--limit");
+      if (limitRaw) {
+        const limit = Number(limitRaw);
+        if (Number.isNaN(limit) || limit <= 0) {
+          stderr("--limit must be a positive number.");
+          return 2;
+        }
+        payload.limit = limit;
+      }
     } else {
       stderr(`Unknown action: ${action}`);
       return 2;
