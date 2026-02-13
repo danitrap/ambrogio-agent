@@ -11,7 +11,17 @@
 
 **Dual Backend:**
 - **SQLite (Source of Truth)**: Tabella `runtime_kv` con pattern `memory:<type>:<id>`
-- **MEMORY.md (Human Interface)**: File markdown generato da SQLite, editabile dall'utente
+- **MEMORY.md (Human Interface)**: File markdown generato da SQLite tramite generic sync system, editabile dall'utente
+
+### Generic Sync System
+
+Il sistema di sync è generico e riutilizzabile da qualsiasi skill:
+
+1. Skill dichiara config in `SYNC.json`
+2. Fornisce script generator personalizzato
+3. CLI orchestra l'esecuzione via `ambrogioctl sync generate`
+
+Questo permette ad altre skill (structured-notes, ecc.) di usare lo stesso pattern.
 
 ### Schema Memoria
 

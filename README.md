@@ -126,6 +126,58 @@ When runtime jobs and TODO intents are ambiguous, the ambrogio-agent asks explic
 
 Legacy commands (`/tasks`, `/task <id>`, `/retrytask <id>`, `/canceltask <id>`) remain available for debugging.
 
+## Skill Sync System
+
+Skills can sync their SQLite state to human-readable markdown files for auditability.
+
+### How It Works
+
+Skills declare sync configuration in a `SYNC.json` manifest:
+
+```json
+{
+  "version": "1",
+  "outputFile": "/data/MEMORY.md",
+  "patterns": ["memory:*"],
+  "generator": "./scripts/sync.sh",
+  "description": "Syncs semantic memory"
+}
+```
+
+The generator script formats data from SQLite to markdown:
+
+```bash
+#!/usr/bin/env bash
+# Environment variables provided:
+# - SYNC_OUTPUT_FILE: target file path
+# - SYNC_PATTERNS: comma-separated patterns
+# - SKILL_DIR: skill directory path
+
+ambrogioctl state list --pattern "$SYNC_PATTERNS" --json | \
+  # ... format as markdown ...
+  > "$SYNC_OUTPUT_FILE"
+```
+
+### Commands
+
+```bash
+# List skills with sync capability
+ambrogioctl sync list
+
+# Generate sync file for specific skill
+ambrogioctl sync generate --skill memory-manager
+
+# Generate for all skills
+ambrogioctl sync generate --all
+
+# Validate manifest
+ambrogioctl sync validate --skill memory-manager
+```
+
+### Skills with Sync
+
+- **memory-manager**: Syncs to `/data/MEMORY.md`
+
 ### Local Job RPC (for skills/tools)
 
 Ambrogio exposes a local Unix-socket job RPC server:
