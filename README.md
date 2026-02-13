@@ -78,8 +78,13 @@ Auth data is persisted in the mounted `./data/.codex` directory.
 When using `BACKEND=claude`, authenticate via token:
 
 ```bash
-docker exec -it ambrogio-agent sh -lc 'HOME=/data CLAUDE_HOME=/data/.claude claude setup-token'
+docker compose exec ambrogio-agent sh -lc 'HOME=/data CLAUDE_HOME=/data/.claude claude setup-token'
 docker compose restart ambrogio-agent
+```
+
+Then add the token to your `.env` file:
+```bash
+CLAUDE_CODE_OAUTH_TOKEN=your-session-key-here
 ```
 
 Requires a Claude subscription. Token is persisted in `./data/.claude`.
