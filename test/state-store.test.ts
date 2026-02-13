@@ -193,4 +193,54 @@ describe("StateStore", () => {
     expect(scoped.map((task) => task.taskId)).toEqual(["dl-b"]);
     store.close();
   });
+
+  test("should support muted_until column for jobs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "state-store-"));
+    tempDirs.push(root);
+
+    const store = await StateStore.open(root);
+    const taskId = "dl-mute-test-1";
+    const runAt = new Date(Date.now() + 3600000).toISOString();
+    const mutedUntil = new Date(Date.now() + 7200000).toISOString();
+
+    store.createDelayedJob({
+      jobId: taskId,
+      updateId: 1,
+      userId: 123,
+      chatId: 123,
+      prompt: "Test muted job",
+      requestPreview: "Test muted job",
+      runAt,
+      mutedUntil,
+    });
+
+    const job = store.getBackgroundJob(taskId);
+    expect(job).not.toBeNull();
+    expect(job?.mutedUntil).toBe(mutedUntil);
+    store.close();
+  });
+
+  test("should support null muted_until for unmuted jobs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "state-store-"));
+    tempDirs.push(root);
+
+    const store = await StateStore.open(root);
+    const taskId = "dl-mute-test-2";
+    const runAt = new Date(Date.now() + 3600000).toISOString();
+
+    store.createDelayedJob({
+      jobId: taskId,
+      updateId: 1,
+      userId: 123,
+      chatId: 123,
+      prompt: "Test unmuted job",
+      requestPreview: "Test unmuted job",
+      runAt,
+    });
+
+    const job = store.getBackgroundJob(taskId);
+    expect(job).not.toBeNull();
+    expect(job?.mutedUntil).toBeNull();
+    store.close();
+  });
 });

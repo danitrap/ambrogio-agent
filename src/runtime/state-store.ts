@@ -37,6 +37,7 @@ export type JobEntry = {
   recurrenceMaxRuns: number | null;
   recurrenceRunCount: number;
   recurrenceEnabled: boolean;
+  mutedUntil: string | null;
 };
 
 // Type aliases for backwards compatibility
@@ -72,6 +73,7 @@ type JobRow = {
   recurrence_max_runs: number | null;
   recurrence_run_count: number;
   recurrence_enabled: number;
+  muted_until: string | null;
 };
 
 type BackgroundTaskRow = JobRow; // Backwards compatibility
@@ -134,6 +136,7 @@ export class StateStore {
       recurrenceMaxRuns: row.recurrence_max_runs,
       recurrenceRunCount: row.recurrence_run_count,
       recurrenceEnabled: row.recurrence_enabled === 1,
+      mutedUntil: row.muted_until,
     };
   }
 
@@ -217,6 +220,15 @@ export class StateStore {
           recurrence_enabled INTEGER DEFAULT 1
         );
       `);
+    }
+
+    // Add muted_until column (migration for existing databases)
+    const mutedUntilColumnExists = this.db
+      .query("SELECT COUNT(*) as count FROM pragma_table_info('jobs') WHERE name='muted_until'")
+      .get() as { count: number };
+
+    if (mutedUntilColumnExists.count === 0) {
+      this.db.run("ALTER TABLE jobs ADD COLUMN muted_until TEXT NULL");
     }
 
     // Create indexes
@@ -454,6 +466,45 @@ export class StateStore {
     );
   }
 
+  createDelayedJob(params: {
+    jobId: string;
+    updateId: number;
+    userId: number;
+    chatId: number;
+    prompt: string;
+    requestPreview: string;
+    runAt: string;
+    mutedUntil?: string | null;
+  }): void {
+    const now = new Date().toISOString();
+    const runAtIso = new Date(params.runAt).toISOString();
+    this.db.run(
+      `INSERT INTO jobs (
+        task_id, kind, update_id, user_id, chat_id, command, payload_prompt,
+        run_at, request_preview, status, created_at, updated_at, timed_out_at,
+        recurrence_type, recurrence_expression, recurrence_max_runs,
+        recurrence_run_count, recurrence_enabled, muted_until
+      ) VALUES (?1, 'delayed', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'scheduled', ?9, ?9, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
+      [
+        params.jobId,
+        params.updateId,
+        params.userId,
+        params.chatId,
+        null,
+        params.prompt,
+        runAtIso,
+        params.requestPreview,
+        now,
+        null,
+        null,
+        null,
+        0,
+        1,
+        params.mutedUntil ?? null,
+      ],
+    );
+  }
+
   claimScheduledJob(jobId: string): boolean {
     const now = new Date().toISOString();
     const result = this.db.run(
@@ -471,7 +522,7 @@ export class StateStore {
       .query(
         `SELECT task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
                 created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message,
-                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled
+                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled, muted_until
          FROM jobs
          WHERE status = 'scheduled'
            AND run_at IS NOT NULL
@@ -489,7 +540,7 @@ export class StateStore {
       .query(
         `SELECT task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
                 created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message,
-                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled
+                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled, muted_until
          FROM jobs
          WHERE user_id = ?1
            AND chat_id = ?2
@@ -577,7 +628,7 @@ export class StateStore {
         `SELECT task_id, update_id, user_id, chat_id, command, request_preview, status,
                 kind, payload_prompt, run_at,
                 created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message,
-                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled
+                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled, muted_until
          FROM jobs
          WHERE status IN ('completed_pending_delivery', 'failed_pending_delivery')
          ORDER BY updated_at ASC
@@ -594,7 +645,7 @@ export class StateStore {
         `SELECT task_id, update_id, user_id, chat_id, command, request_preview, status,
                 kind, payload_prompt, run_at,
                 created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message,
-                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled
+                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled, muted_until
          FROM jobs
          WHERE status IN ('scheduled', 'running', 'completed_pending_delivery', 'failed_pending_delivery')
          ORDER BY created_at DESC
@@ -610,7 +661,7 @@ export class StateStore {
       .query(
         `SELECT task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
                 created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message,
-                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled
+                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled, muted_until
          FROM jobs
          WHERE task_id = ?1`,
       )
@@ -740,6 +791,7 @@ export class StateStore {
     recurrenceType: "interval" | "cron";
     recurrenceExpression: string;
     maxRuns?: number;
+    mutedUntil?: string | null;
   }): void {
     const now = new Date().toISOString();
     const runAtIso = new Date(params.runAt).toISOString();
@@ -747,8 +799,8 @@ export class StateStore {
       `INSERT INTO jobs (
         task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
         created_at, updated_at, timed_out_at,
-        recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled
-      ) VALUES (?1, 'recurring', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'scheduled', ?9, ?9, ?9, ?10, ?11, ?12, 0, 1)`,
+        recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled, muted_until
+      ) VALUES (?1, 'recurring', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'scheduled', ?9, ?9, ?9, ?10, ?11, ?12, 0, 1, ?13)`,
       [
         params.jobId,
         params.updateId,
@@ -762,6 +814,7 @@ export class StateStore {
         params.recurrenceType,
         params.recurrenceExpression,
         params.maxRuns ?? null,
+        params.mutedUntil ?? null,
       ],
     );
   }
@@ -880,7 +933,7 @@ export class StateStore {
       .query(
         `SELECT task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
                 created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message,
-                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled
+                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled, muted_until
          FROM jobs
          WHERE kind = 'recurring'
          ORDER BY created_at DESC
