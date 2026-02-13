@@ -204,22 +204,3 @@ complete_task() {
   echo "Completed: $task"
 }
 ```
-
-## Sync Analytics
-
-Generate analytics report from task metadata:
-
-```bash
-# Generate analytics with completion rates, durations, and long-running tasks
-ambrogioctl sync generate --skill todo-manager
-
-# View the analytics
-cat /data/TODO_ANALYTICS.md
-```
-
-The analytics report includes:
-- Completion rate statistics
-- Average task completion time
-- Recently completed tasks with durations
-- Long-running open tasks sorted by age
-```
