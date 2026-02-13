@@ -1,5 +1,6 @@
 // src/cli/sync-manifest.ts
 import path from "node:path";
+import { readdir, readFile, stat } from "node:fs/promises";
 
 export type SyncManifest = {
   version: string;
@@ -12,6 +13,12 @@ export type SyncManifest = {
 export type ValidationResult = {
   valid: boolean;
   errors: string[];
+};
+
+export type SyncSkill = {
+  name: string;
+  skillDir: string;
+  manifest: SyncManifest;
 };
 
 export function validateSyncManifest(manifest: unknown): ValidationResult {
@@ -58,4 +65,55 @@ export function validateSyncManifest(manifest: unknown): ValidationResult {
     valid: errors.length === 0,
     errors,
   };
+}
+
+export async function discoverSyncSkills(
+  directories: string[],
+): Promise<SyncSkill[]> {
+  const skills: SyncSkill[] = [];
+
+  for (const dir of directories) {
+    try {
+      const entries = await readdir(dir);
+
+      for (const entry of entries) {
+        const skillDir = path.join(dir, entry);
+
+        try {
+          const stats = await stat(skillDir);
+          if (!stats.isDirectory()) continue;
+
+          const syncJsonPath = path.join(skillDir, "SYNC.json");
+          try {
+            const content = await readFile(syncJsonPath, "utf-8");
+            const manifest = JSON.parse(content);
+
+            const validation = validateSyncManifest(manifest);
+            if (!validation.valid) {
+              console.warn(
+                `Skipping ${entry}: invalid SYNC.json - ${validation.errors.join(", ")}`,
+              );
+              continue;
+            }
+
+            skills.push({
+              name: entry,
+              skillDir,
+              manifest,
+            });
+          } catch (err) {
+            // No SYNC.json or invalid JSON - skip silently
+            continue;
+          }
+        } catch {
+          continue;
+        }
+      }
+    } catch {
+      // Directory doesn't exist - skip
+      continue;
+    }
+  }
+
+  return skills;
 }
