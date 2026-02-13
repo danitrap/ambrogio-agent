@@ -51,5 +51,4 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 USER ambrogio-agent
 
 ENV NODE_ENV=production
-ENV CLAUDE_HOME=/data/.claude
 CMD ["bun", "run", "src/main.ts"]
