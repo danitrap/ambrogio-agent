@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
 import type { Logger } from "../logging/audit";
 import { correlationFields } from "../logging/correlation";
 import type {
@@ -47,7 +48,24 @@ function previewLogText(value: string, max = 240): string {
   return `${normalized.slice(0, max)}...`;
 }
 
-function buildPromptText(request: ModelRequest): string {
+async function buildPromptText(
+  request: ModelRequest,
+  dataRoot: string,
+): Promise<string> {
+  // Load AGENTS.md system instructions
+  const agentsPath = `${dataRoot}/AGENTS.md`;
+  let systemInstructions = "";
+
+  try {
+    systemInstructions = await readFile(agentsPath, "utf8");
+  } catch {
+    // AGENTS.md not found, continue without it
+  }
+
+  if (systemInstructions) {
+    return `${systemInstructions}\n\n---\n\nUser message:\n${request.message}`;
+  }
+
   return request.message;
 }
 
@@ -102,7 +120,7 @@ export class ClaudeBridge implements ModelBridge {
     const startedAt = Date.now();
     const startedAtIso = new Date(startedAt).toISOString();
     const requestId = request.requestId;
-    const prompt = buildPromptText(request);
+    const prompt = await buildPromptText(request, this.cwd ?? this.rootDir);
 
     const hasDangerFlag = this.args.includes("--dangerously-skip-permissions");
     const execArgs = [
