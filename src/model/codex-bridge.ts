@@ -1,7 +1,3 @@
-/**
- * @deprecated Use CodexBridge instead. This file is kept temporarily for reference.
- * Will be removed in a future release.
- */
 import type { Logger } from "../logging/audit";
 import { correlationFields } from "../logging/correlation";
 import type { ModelBridge, ModelExecutionSummary, ModelRequest, ModelResponse } from "./types";
@@ -80,7 +76,7 @@ export function extractCodexAuditActions(stderr: string): CodexAuditAction[] {
   return actions;
 }
 
-export class ExecBridge implements ModelBridge {
+export class CodexBridge implements ModelBridge {
   private readonly cwd?: string;
   private readonly rootDir: string;
   private readonly envOverrides?: Record<string, string>;
