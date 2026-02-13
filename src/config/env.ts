@@ -24,6 +24,9 @@ export type AppConfig = {
   dataRoot: string;
   codexCommand: string;
   codexArgs: string[];
+  backend: "codex" | "claude";
+  claudeCommand: string;
+  claudeArgs: string[];
   logLevel: LogLevel;
   telegramPollTimeoutSeconds: number;
   heartbeatQuietHours: string | null;
@@ -36,6 +39,14 @@ export function loadConfig(): AppConfig {
     ? codexArgsRaw.split(" ").map((part) => part.trim()).filter(Boolean)
     : ["--dangerously-bypass-approvals-and-sandbox"];
 
+  const backend = (Bun.env.BACKEND?.toLowerCase() ?? "codex") as
+    | "codex"
+    | "claude";
+  const claudeArgsRaw = Bun.env.CLAUDE_ARGS;
+  const claudeArgs = claudeArgsRaw
+    ? claudeArgsRaw.split(" ").map((part) => part.trim()).filter(Boolean)
+    : [];
+
   return {
     telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),
     telegramAllowedUserId: parseNumber(requireEnv("TELEGRAM_ALLOWED_USER_ID"), "TELEGRAM_ALLOWED_USER_ID"),
@@ -44,6 +55,9 @@ export function loadConfig(): AppConfig {
     dataRoot: Bun.env.DATA_ROOT ?? "/data",
     codexCommand: Bun.env.CODEX_COMMAND ?? "codex",
     codexArgs,
+    backend,
+    claudeCommand: Bun.env.CLAUDE_COMMAND ?? "claude",
+    claudeArgs,
     logLevel,
     telegramPollTimeoutSeconds: parseNumber(Bun.env.TELEGRAM_POLL_TIMEOUT_SECONDS ?? "20", "TELEGRAM_POLL_TIMEOUT_SECONDS"),
     heartbeatQuietHours: Bun.env.HEARTBEAT_QUIET_HOURS?.trim() || null,
