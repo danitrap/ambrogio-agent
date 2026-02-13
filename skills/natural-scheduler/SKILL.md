@@ -139,6 +139,73 @@ When user provides natural language, map to recurrence expressions:
 - "every day at 6pm" → `--type cron --expression "0 18 * * *"`
 - "every 2 hours" → `--type interval --expression "2h"`
 
+## Muting Jobs
+
+Users can temporarily mute jobs to prevent notifications until a specified time.
+
+### Mute Commands
+
+- Mute specific job:
+  - `ambrogioctl jobs mute --id <jobId> --until <ISO> --json`
+- Mute multiple jobs by pattern:
+  - `ambrogioctl jobs mute-pattern --pattern <text> --until <ISO> --json`
+- Unmute job:
+  - `ambrogioctl jobs unmute --id <jobId> --json`
+- List muted jobs:
+  - `ambrogioctl jobs list-muted [--limit <N>] --json`
+
+### Natural Language Muting Examples
+
+**Italian:**
+
+- "Sono sul tram, non mandarmi più promemoria per il tram" → Find jobs matching "tram", mute until tomorrow 7:00am
+- "Muta il job meteo fino a lunedì" → Mute weather job until next Monday 7:00am
+- "Non disturbarmi più oggi" → Mute all scheduled jobs until tomorrow morning
+- "Riattiva i promemoria del tram" → Unmute all tram-related jobs
+- "Quali job sono mutati?" → List muted jobs
+
+**English:**
+
+- "I'm on the tram, stop alerting me" → Find jobs matching "tram", mute until tomorrow 7:00am
+- "Mute the weather job until next week" → Mute weather job until next Monday
+- "Don't bother me today" → Mute all scheduled jobs until tomorrow
+- "Unmute the tram reminders" → Clear mute on tram jobs
+- "Show muted jobs" → List muted jobs
+
+### Mute Until Time Calculation
+
+When user says "stop for today" or "I'm on the tram":
+
+- Calculate: tomorrow at 7:00am local time
+- Format: ISO 8601 timestamp
+
+When user says "until next week":
+
+- Calculate: next Monday at 7:00am local time
+- Format: ISO 8601 timestamp
+
+### Pattern Matching Strategy
+
+1. Extract keywords from user message (e.g., "tram", "weather", "meteo")
+2. Use `jobs mute-pattern --pattern <keyword>` to match prompts/previews
+3. Confirm number of jobs muted
+4. Reply with confirmation including unmute time
+
+### Example Interaction: Contextual Muting
+
+**User:** "Sono sul tram"
+
+**Agent Response:**
+
+1. Identify context: user is on the tram
+2. Find tram-related jobs: `ambrogioctl jobs list-recurring --json | grep -i tram`
+3. Calculate mute until: tomorrow 7:00am
+4. Mute jobs:
+   ```bash
+   ambrogioctl jobs mute-pattern --pattern "tram" --until "2026-02-14T07:00:00+01:00" --json
+   ```
+5. Reply: "Ok Signor Daniele, ho mutato 3 promemoria del tram fino a domani mattina alle 7:00."
+
 ## Example Interactions
 
 ### Example 1: Simple Reminder (One-Shot)
