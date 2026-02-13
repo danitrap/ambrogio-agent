@@ -25,6 +25,10 @@ beforeAll(async () => {
 
   // Set socket path in environment
   process.env.AMBROGIO_SOCKET_PATH = TEST_SOCKET;
+
+  // Add project bin to PATH for ambrogioctl
+  const binDir = path.join(import.meta.dir, "..", "bin");
+  process.env.PATH = `${binDir}:${process.env.PATH}`;
 });
 
 afterAll(async () => {

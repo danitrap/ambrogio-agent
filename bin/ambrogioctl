@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Wrapper for ambrogioctl to be used in PATH
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec bun run "$SCRIPT_DIR/../src/cli/ambrogioctl.ts" "$@"
