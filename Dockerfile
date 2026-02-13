@@ -41,12 +41,14 @@ RUN echo '#!/bin/bash\nexec bun run /app/src/cli/ambrogioctl.ts "$@"' > /usr/loc
   && chmod +x /usr/local/bin/ambrogioctl
 
 RUN groupadd --system ambrogio-agent && useradd --system --gid ambrogio-agent --create-home ambrogio-agent
-USER ambrogio-agent
 
-# Install Claude Code CLI as the runtime user
+# Install Claude Code CLI globally before switching user
 RUN curl -fsSL https://claude.ai/install.sh | bash \
-  && echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-ENV PATH="/home/ambrogio-agent/.local/bin:${PATH}"
+  && if [ -f /root/.local/bin/claude ]; then \
+       cp /root/.local/bin/claude /usr/local/bin/claude && chmod +x /usr/local/bin/claude; \
+     fi
+
+USER ambrogio-agent
 
 ENV NODE_ENV=production
 ENV CLAUDE_HOME=/data/.claude
