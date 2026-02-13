@@ -28,6 +28,10 @@ The Ambrogio runtime manages three types of background jobs:
 - If request is ambiguous between runtime job and TODO, ask explicit confirmation before executing.
 - Always append `--json` to ambrogioctl commands and parse results before replying.
 - **CRITICAL**: When creating delayed or recurring jobs, transform the user request into a delivery-ready prompt that does NOT look like a new request. See "Prompt Transformation Rules" below.
+- **OPTIMIZATION**: Use the most specific command for the query:
+  - "quali job sono mutati?" → use `jobs list-muted` (not `jobs list`)
+  - "mostra job ricorrenti" → use `jobs list-recurring` (not `jobs list`)
+  - "lista tutti i job" → use `jobs list`
 
 ## Supported Intents
 
@@ -58,6 +62,18 @@ The Ambrogio runtime manages three types of background jobs:
   - `ambrogioctl jobs update-recurrence --id <jobId> --expression <expr> --json`
 - Cancel recurring job (permanently):
   - `ambrogioctl jobs cancel --id <jobId> --json` (works for all job types)
+
+### Muted Jobs
+
+- **List muted jobs** (PREFERRED for "quali job sono mutati?"):
+  - `ambrogioctl jobs list-muted [--limit <N>] --json`
+  - Returns only jobs with active mute (faster than filtering `jobs list`)
+- Mute specific job:
+  - `ambrogioctl jobs mute --id <jobId> --until <ISO> --json`
+- Mute by pattern (for contextual muting):
+  - `ambrogioctl jobs mute-pattern --pattern <text> --until <ISO> --json`
+- Unmute job:
+  - `ambrogioctl jobs unmute --id <jobId> --json`
 
 ## Prompt Transformation Rules
 
@@ -158,19 +174,19 @@ Users can temporarily mute jobs to prevent notifications until a specified time.
 
 **Italian:**
 
-- "Sono sul tram, non mandarmi più promemoria per il tram" → Find jobs matching "tram", mute until tomorrow 7:00am
-- "Muta il job meteo fino a lunedì" → Mute weather job until next Monday 7:00am
-- "Non disturbarmi più oggi" → Mute all scheduled jobs until tomorrow morning
-- "Riattiva i promemoria del tram" → Unmute all tram-related jobs
-- "Quali job sono mutati?" → List muted jobs
+- "Sono sul tram, non mandarmi più promemoria per il tram" → Use `jobs mute-pattern --pattern "tram"` until tomorrow 7:00am
+- "Muta il job meteo fino a lunedì" → Use `jobs mute-pattern --pattern "meteo"` until next Monday 7:00am
+- "Non disturbarmi più oggi" → Use `jobs mute-pattern --pattern ""` (empty = all jobs) until tomorrow morning
+- "Riattiva i promemoria del tram" → Use `jobs mute-pattern --pattern "tram"` with past timestamp, OR find job IDs and use `jobs unmute --id <id>`
+- "Quali job sono mutati?" → Use `jobs list-muted --json` (NOT `jobs list`)
 
 **English:**
 
-- "I'm on the tram, stop alerting me" → Find jobs matching "tram", mute until tomorrow 7:00am
-- "Mute the weather job until next week" → Mute weather job until next Monday
-- "Don't bother me today" → Mute all scheduled jobs until tomorrow
-- "Unmute the tram reminders" → Clear mute on tram jobs
-- "Show muted jobs" → List muted jobs
+- "I'm on the tram, stop alerting me" → Use `jobs mute-pattern --pattern "tram"` until tomorrow 7:00am
+- "Mute the weather job until next week" → Use `jobs mute-pattern --pattern "weather"` until next Monday
+- "Don't bother me today" → Use `jobs mute-pattern --pattern ""` (empty = all jobs) until tomorrow
+- "Unmute the tram reminders" → Use `jobs mute-pattern --pattern "tram"` with past timestamp, OR find job IDs and use `jobs unmute --id <id>`
+- "Show muted jobs" → Use `jobs list-muted --json` (NOT `jobs list`)
 
 ### Mute Until Time Calculation
 
@@ -191,20 +207,50 @@ When user says "until next week":
 3. Confirm number of jobs muted
 4. Reply with confirmation including unmute time
 
-### Example Interaction: Contextual Muting
+### Example Interactions: Muting
+
+**Interaction 1: Contextual Muting**
 
 **User:** "Sono sul tram"
 
-**Agent Response:**
-
-1. Identify context: user is on the tram
-2. Find tram-related jobs: `ambrogioctl jobs list-recurring --json | grep -i tram`
-3. Calculate mute until: tomorrow 7:00am
-4. Mute jobs:
+**Agent Actions:**
+1. Identify context: user is on the tram (wants to mute tram reminders)
+2. Calculate mute until: tomorrow 7:00am local time → `2026-02-14T07:00:00+01:00`
+3. Execute:
    ```bash
    ambrogioctl jobs mute-pattern --pattern "tram" --until "2026-02-14T07:00:00+01:00" --json
    ```
-5. Reply: "Ok Signor Daniele, ho mutato 3 promemoria del tram fino a domani mattina alle 7:00."
+4. Reply: "Ok Signor Daniele, ho mutato 3 promemoria del tram fino a domani mattina alle 7:00."
+
+**Interaction 2: List Muted Jobs (OPTIMIZED)**
+
+**User:** "Quali job sono mutati?"
+
+**Agent Actions:**
+1. Execute (CORRECT - specific command):
+   ```bash
+   ambrogioctl jobs list-muted --json
+   ```
+   ❌ NOT: `ambrogioctl jobs list --json` (inefficient, returns all jobs)
+
+2. Parse response and reply:
+   - If empty: "Signor Daniele, al momento non ci sono job mutati."
+   - If found: List each muted job with ID, description, and muted_until timestamp
+
+**Interaction 3: Unmute by Pattern**
+
+**User:** "Riattiva i promemoria del tram"
+
+**Agent Actions:**
+1. Find tram job IDs:
+   ```bash
+   ambrogioctl jobs list-muted --json
+   ```
+2. For each matching job, unmute:
+   ```bash
+   ambrogioctl jobs unmute --id <jobId> --json
+   ```
+3. Reply: "Ok Signor Daniele, ho riattivato 3 promemoria del tram."
 
 ## Example Interactions
 
