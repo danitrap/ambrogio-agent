@@ -226,14 +226,28 @@ async function main(): Promise<void> {
 
   const projectSkillsRoot = Bun.env.PROJECT_SKILLS_ROOT ?? path.resolve(import.meta.dir, "..", "skills");
   const codexSkillsRoot = `${codexHome}/skills`;
-  const bootstrapResult = await bootstrapProjectSkills({
+  const claudeSkillsRoot = `${claudeHome}/skills`;
+
+  // Sync to both directories to support backend switching
+  const codexBootstrapResult = await bootstrapProjectSkills({
     sourceRoot: projectSkillsRoot,
     destinationRoot: codexSkillsRoot,
   });
+  const claudeBootstrapResult = await bootstrapProjectSkills({
+    sourceRoot: projectSkillsRoot,
+    destinationRoot: claudeSkillsRoot,
+  });
+
+  const bootstrapResult = {
+    copied: [...codexBootstrapResult.copied, ...claudeBootstrapResult.copied],
+    updated: [...codexBootstrapResult.updated, ...claudeBootstrapResult.updated],
+    skipped: [...codexBootstrapResult.skipped, ...claudeBootstrapResult.skipped],
+  };
+
   if (bootstrapResult.copied.length > 0 || bootstrapResult.updated.length > 0 || bootstrapResult.skipped.length > 0) {
     logger.info("skills_bootstrap_completed", {
       sourceRoot: projectSkillsRoot,
-      destinationRoot: codexSkillsRoot,
+      destinationRoots: [codexSkillsRoot, claudeSkillsRoot],
       copiedCount: bootstrapResult.copied.length,
       updatedCount: bootstrapResult.updated.length,
       skippedCount: bootstrapResult.skipped.length,
@@ -920,10 +934,12 @@ async function main(): Promise<void> {
             return lines.join("\n");
           },
           getSkillsReply: async () => {
-            const skills = new SkillDiscovery(codexSkillsRoot);
+            const skillsRoot =
+              config.backend === "codex" ? codexSkillsRoot : claudeSkillsRoot;
+            const skills = new SkillDiscovery(skillsRoot);
             const discovered = await skills.discover();
             if (discovered.length === 0) {
-              return "Nessuna skill disponibile in /data/.codex/skills.";
+              return `Nessuna skill disponibile in ${skillsRoot}.`;
             }
             const lines = [
               "Skills disponibili:",
