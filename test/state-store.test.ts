@@ -268,4 +268,113 @@ describe("StateStore", () => {
     expect(job?.status).toBe("skipped_muted");
     store.close();
   });
+
+  test("should mute a specific job", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "state-store-"));
+    tempDirs.push(root);
+
+    const store = await StateStore.open(root);
+    const taskId = "dl-mute-op-1";
+    const runAt = new Date(Date.now() + 3600000).toISOString();
+    const mutedUntil = new Date(Date.now() + 7200000).toISOString();
+
+    store.createDelayedJob({
+      jobId: taskId,
+      updateId: 1,
+      userId: 123,
+      chatId: 123,
+      prompt: "Test mute",
+      requestPreview: "Test mute",
+      runAt,
+    });
+
+    const result = store.muteJob(taskId, mutedUntil);
+    expect(result).toBe(true);
+
+    const job = store.getBackgroundJob(taskId);
+    expect(job?.mutedUntil).toBe(mutedUntil);
+    store.close();
+  });
+
+  test("should unmute a job", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "state-store-"));
+    tempDirs.push(root);
+
+    const store = await StateStore.open(root);
+    const taskId = "dl-unmute-op-1";
+    const runAt = new Date(Date.now() + 3600000).toISOString();
+    const mutedUntil = new Date(Date.now() + 7200000).toISOString();
+
+    store.createDelayedJob({
+      jobId: taskId,
+      updateId: 1,
+      userId: 123,
+      chatId: 123,
+      prompt: "Test unmute",
+      requestPreview: "Test unmute",
+      runAt,
+      mutedUntil,
+    });
+
+    const result = store.unmuteJob(taskId);
+    expect(result).toBe(true);
+
+    const job = store.getBackgroundJob(taskId);
+    expect(job?.mutedUntil).toBeNull();
+    store.close();
+  });
+
+  test("should mute jobs by pattern matching", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "state-store-"));
+    tempDirs.push(root);
+
+    const store = await StateStore.open(root);
+    const runAt = new Date(Date.now() + 3600000).toISOString();
+    const mutedUntil = new Date(Date.now() + 7200000).toISOString();
+
+    // Create multiple jobs
+    store.createDelayedJob({
+      jobId: "dl-tram-1",
+      updateId: 1,
+      userId: 123,
+      chatId: 123,
+      prompt: "Tram at 8:00",
+      requestPreview: "Tram reminder",
+      runAt,
+    });
+
+    store.createRecurringJob({
+      jobId: "rc-tram-2",
+      updateId: 2,
+      userId: 123,
+      chatId: 123,
+      prompt: "Tram at 8:15",
+      requestPreview: "Tram reminder",
+      runAt,
+      recurrenceType: "interval",
+      recurrenceExpression: "1d",
+    });
+
+    store.createDelayedJob({
+      jobId: "dl-weather-1",
+      updateId: 3,
+      userId: 123,
+      chatId: 123,
+      prompt: "Weather check",
+      requestPreview: "Weather reminder",
+      runAt,
+    });
+
+    const count = store.muteJobsByPattern("tram", mutedUntil);
+    expect(count).toBe(2);
+
+    const tram1 = store.getBackgroundJob("dl-tram-1");
+    const tram2 = store.getBackgroundJob("rc-tram-2");
+    const weather = store.getBackgroundJob("dl-weather-1");
+
+    expect(tram1?.mutedUntil).toBe(mutedUntil);
+    expect(tram2?.mutedUntil).toBe(mutedUntil);
+    expect(weather?.mutedUntil).toBeNull();
+    store.close();
+  });
 });

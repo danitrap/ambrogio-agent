@@ -632,6 +632,49 @@ export class StateStore {
     return (result.changes ?? 0) > 0;
   }
 
+  muteJob(taskId: string, mutedUntil: string): boolean {
+    const result = this.db.run(
+      `UPDATE jobs SET muted_until = ? WHERE task_id = ?`,
+      [mutedUntil, taskId],
+    );
+    return (result.changes ?? 0) > 0;
+  }
+
+  unmuteJob(taskId: string): boolean {
+    const result = this.db.run(
+      `UPDATE jobs SET muted_until = NULL WHERE task_id = ?`,
+      [taskId],
+    );
+    return (result.changes ?? 0) > 0;
+  }
+
+  muteJobsByPattern(pattern: string, mutedUntil: string): number {
+    const result = this.db.run(
+      `UPDATE jobs
+       SET muted_until = ?
+       WHERE (payload_prompt LIKE ? OR request_preview LIKE ?)
+       AND status IN ('scheduled', 'running')`,
+      [mutedUntil, `%${pattern}%`, `%${pattern}%`],
+    );
+    return result.changes ?? 0;
+  }
+
+  getMutedJobs(limit = 50): JobEntry[] {
+    const rows = this.db
+      .query(
+        `SELECT task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
+                created_at, timed_out_at, completed_at, delivered_at, delivery_text, error_message,
+                recurrence_type, recurrence_expression, recurrence_max_runs, recurrence_run_count, recurrence_enabled, muted_until
+         FROM jobs
+         WHERE muted_until IS NOT NULL
+         AND muted_until > datetime('now')
+         ORDER BY muted_until ASC
+         LIMIT ?`,
+      )
+      .all(limit) as JobRow[];
+    return rows.map((row) => this.mapJobRow(row));
+  }
+
   getPendingBackgroundJobs(limit = 20): JobEntry[] {
     const rows = this.db
       .query(
