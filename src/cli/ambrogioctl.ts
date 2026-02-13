@@ -1139,6 +1139,9 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
 
 if (import.meta.main) {
   const socketPath = process.env.AMBROGIO_SOCKET_PATH ?? "/tmp/ambrogio-agent.sock";
-  const code = await runAmbrogioCtl(process.argv.slice(2), { socketPath });
+  const code = await runAmbrogioCtl(process.argv.slice(2), {
+    socketPath,
+    env: process.env as Record<string, string>,
+  });
   process.exit(code);
 }
