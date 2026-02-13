@@ -53,7 +53,7 @@ describe("Muted Jobs Integration", () => {
     // List muted jobs
     const muted = stateStore.getMutedJobs(10);
     expect(muted.length).toBe(1);
-    expect(muted[0].taskId).toBe(taskId);
+    expect(muted[0]?.taskId).toBe(taskId);
 
     // Unmute job
     stateStore.unmuteJob(taskId);

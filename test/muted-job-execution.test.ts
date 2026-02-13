@@ -45,10 +45,10 @@ describe("Muted Job Execution", () => {
     const job = stateStore.getBackgroundJob(taskId);
     expect(job).not.toBeNull();
 
-    // Helper to check if job should be muted
-    const shouldSkipDueToMute = (job: NonNullable<typeof job>): boolean => {
-      if (!job.mutedUntil) return false;
-      const mutedUntilDate = new Date(job.mutedUntil);
+    // Check if job should be muted
+    const shouldSkipDueToMute = (j: NonNullable<ReturnType<typeof stateStore.getBackgroundJob>>): boolean => {
+      if (!j.mutedUntil) return false;
+      const mutedUntilDate = new Date(j.mutedUntil);
       const now = new Date();
       return mutedUntilDate > now;
     };
@@ -75,9 +75,9 @@ describe("Muted Job Execution", () => {
     const job = stateStore.getBackgroundJob(taskId);
     expect(job).not.toBeNull();
 
-    const shouldSkipDueToMute = (job: NonNullable<typeof job>): boolean => {
-      if (!job.mutedUntil) return false;
-      const mutedUntilDate = new Date(job.mutedUntil);
+    const shouldSkipDueToMute = (j: NonNullable<ReturnType<typeof stateStore.getBackgroundJob>>): boolean => {
+      if (!j.mutedUntil) return false;
+      const mutedUntilDate = new Date(j.mutedUntil);
       const now = new Date();
       return mutedUntilDate > now;
     };
