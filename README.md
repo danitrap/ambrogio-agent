@@ -11,7 +11,8 @@ Personal-only ambrogio-agent wrapper for Telegram with a secure `/data` boundary
 - Agent Skills-compatible discovery from `/data/.codex/skills/*/SKILL.md`
 - Bootstrap automatico delle skill versionate in `./skills` verso `/data/.codex/skills` (missing + drift sync)
 - Docker hardening baseline (`read_only`, `cap_drop=ALL`, `no-new-privileges`)
-- Backend-tools-only mode via `codex exec` (no local fallback execution).
+- Dual backend support: OpenAI Codex (`codex exec`) or Claude Code (`claude -p`) via `BACKEND` env var
+- Backend-tools-only mode via `codex exec` or `claude -p` (no local fallback execution).
 - Minimal heartbeat loop every 30 minutes with `HEARTBEAT_OK` silent mode, explicit `checkin|alert` actions, and Telegram delivery with dedup.
 - Soft-timeout for long requests (60s): user gets immediate "background job" feedback while Codex continues.
 - Background job lifecycle persisted in SQLite with delivery retry.
@@ -37,8 +38,11 @@ cp .env.example .env
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ALLOWED_USER_ID`
 - `OPENAI_API_KEY`
-- `CODEX_COMMAND` (default: `codex`)
+- `BACKEND` (default: `codex`, options: `codex` or `claude`)
+- `CODEX_COMMAND` (default: `codex`, only used when `BACKEND=codex`)
 - `CODEX_ARGS` (default: `--dangerously-bypass-approvals-and-sandbox -c instructions=codex_fs` inside this containerized setup)
+- `CLAUDE_COMMAND` (default: `claude`, only used when `BACKEND=claude`)
+- `CLAUDE_ARGS` (optional additional args for Claude Code)
 - `HEARTBEAT_QUIET_HOURS` (default suggested: `22:00-06:00`, local timezone; suppresses only timer check-ins)
 
 4. Start:
@@ -60,7 +64,7 @@ BuildKit cache is enabled in compose and persisted in `.docker-cache`, so later 
 
 ## ChatGPT login (device auth)
 
-When running in Docker, use device auth to avoid localhost callback issues:
+When using `BACKEND=codex`, use device auth to avoid localhost callback issues:
 
 ```bash
 docker exec -it ambrogio-agent sh -lc 'HOME=/data CODEX_HOME=/data/.codex codex login --device-auth'
@@ -68,6 +72,17 @@ docker compose restart ambrogio-agent
 ```
 
 Auth data is persisted in the mounted `./data/.codex` directory.
+
+## Claude Code authentication (token auth)
+
+When using `BACKEND=claude`, authenticate via token:
+
+```bash
+docker exec -it ambrogio-agent sh -lc 'HOME=/data CLAUDE_HOME=/data/.claude claude setup-token'
+docker compose restart ambrogio-agent
+```
+
+Requires a Claude subscription. Token is persisted in `./data/.claude`.
 
 All writable state is under `./data` on the host, mounted to `/data` in the container.
 
@@ -265,11 +280,18 @@ Se serve, puoi cambiare sorgente con `PROJECT_SKILLS_ROOT`.
 
 ## Model bridge contract (current)
 
-The service runs `codex exec` per request and passes the prompt via stdin.
+The service runs either `codex exec` or `claude -p` per request based on `BACKEND` env var.
 
-- `--output-last-message` is used to capture the final assistant message.
-- File/photo/audio delivery is performed through local RPC (`ambrogioctl telegram ...`), not XML-like output tags.
-- Tool execution is handled inside Codex runtime (`shell`/`apply_patch`), not by host-side tool calls.
+**Codex mode:**
+- `--output-last-message` captures the final assistant message to a file
+- Tool execution handled inside Codex runtime
+
+**Claude mode:**
+- `--output-format json` returns structured response via stdout
+- `--no-session-persistence` since conversation state managed externally
+- Tool execution handled inside Claude runtime
+
+File/photo/audio delivery is performed through local RPC (`ambrogioctl telegram ...`), not XML-like output tags.
 
 ## Tests
 
