@@ -306,7 +306,9 @@ async function main(): Promise<void> {
 
   logger.info("ambrogio_agent_started", {
     dataRoot: config.dataRoot,
-    codexCommand: config.codexCommand,
+    backend: config.backend,
+    command: config.backend === "codex" ? config.codexCommand : config.claudeCommand,
+    args: config.backend === "codex" ? config.codexArgs : config.claudeArgs,
   });
 
   let offset = 0;
