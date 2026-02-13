@@ -176,7 +176,9 @@ ambrogioctl sync validate --skill memory-manager
 
 ### Skills with Sync
 
-- **memory-manager**: Syncs to `/data/MEMORY.md`
+- **memory-manager**: Syncs to `/data/MEMORY.md` - semantic memory with preferences, facts, and patterns
+- **structured-notes**: Syncs to `/data/NOTES.md` - organized notes by type (project, decision, log) with tags
+- **todo-manager**: Syncs to `/data/TODO_ANALYTICS.md` - task analytics with completion rates and durations
 
 ### Local Job RPC (for skills/tools)
 
