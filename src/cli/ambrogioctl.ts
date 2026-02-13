@@ -1,4 +1,5 @@
 import { createConnection } from "node:net";
+import { discoverSyncSkills, type SyncSkill } from "./sync-manifest";
 
 type RpcError = { code: string; message: string };
 type RpcResponse = { ok: true; result: unknown } | { ok: false; error: RpcError };
@@ -8,6 +9,7 @@ type RunDeps = {
   sendRpc?: (op: string, args: Record<string, unknown>) => Promise<RpcResponse>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
+  env?: Record<string, string>;
 };
 
 function readFlag(args: string[], name: string): string | null {
@@ -988,7 +990,88 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
     return 2;
   }
 
-  stderr("Usage: ambrogioctl <jobs|tasks|status|telegram|state|conversation|memory> [options]");
+  if (scope === "sync") {
+    if (!action) {
+      stderr("Usage: ambrogioctl sync <list|validate|generate> [options]");
+      return 2;
+    }
+
+    const json = hasFlag(args, "--json");
+    const skillsDirs = (deps.env?.SKILLS_DIRS ?? "/data/.codex/skills").split(
+      ":",
+    );
+
+    if (action === "list") {
+      try {
+        const skills = await discoverSyncSkills(skillsDirs);
+
+        if (json) {
+          stdout(
+            JSON.stringify({
+              skills: skills.map((s) => ({
+                name: s.name,
+                outputFile: s.manifest.outputFile,
+                patterns: s.manifest.patterns,
+                description: s.manifest.description,
+              })),
+            }),
+          );
+        } else {
+          if (skills.length === 0) {
+            stdout("No skills with SYNC.json found.");
+          } else {
+            stdout(`Found ${skills.length} skill(s) with sync capability:\n`);
+            for (const skill of skills) {
+              stdout(`  ${skill.name}`);
+              stdout(`    Output: ${skill.manifest.outputFile}`);
+              stdout(`    Patterns: ${skill.manifest.patterns.join(", ")}`);
+              if (skill.manifest.description) {
+                stdout(`    Description: ${skill.manifest.description}`);
+              }
+              stdout("");
+            }
+          }
+        }
+        return 0;
+      } catch (error) {
+        stderr(`Error discovering skills: ${error}`);
+        return 10;
+      }
+    }
+
+    if (action === "validate") {
+      const skillName = readFlag(args, "--skill");
+      if (!skillName) {
+        stderr("--skill is required for validate");
+        return 2;
+      }
+
+      try {
+        const skills = await discoverSyncSkills(skillsDirs);
+        const skill = skills.find((s) => s.name === skillName);
+
+        if (!skill) {
+          stderr(`Skill '${skillName}' not found or has no SYNC.json`);
+          return 3;
+        }
+
+        if (json) {
+          stdout(JSON.stringify({ valid: true, skill: skill.name }));
+        } else {
+          stdout(`✓ SYNC.json for '${skillName}' is valid`);
+        }
+        return 0;
+      } catch (error) {
+        stderr(`Validation error: ${error}`);
+        return 10;
+      }
+    }
+
+    stderr(`Unknown sync action: ${action}`);
+    return 2;
+  }
+
+  stderr("Usage: ambrogioctl <jobs|tasks|status|telegram|state|conversation|memory|sync> [options]");
   return 2;
 }
 
