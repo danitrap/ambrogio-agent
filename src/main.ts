@@ -272,6 +272,16 @@ async function main(): Promise<void> {
       skipped: agentsBootstrapResult.skipped,
     });
   }
+
+  // Create CLAUDE.md symlink for Claude Code CLI
+  const claudeMdPath = path.join(config.dataRoot, "CLAUDE.md");
+  try {
+    await Bun.write(claudeMdPath, Bun.file(dataAgentsFile));
+    logger.debug("claude_md_synced", { source: dataAgentsFile, destination: claudeMdPath });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn("claude_md_sync_failed", { message });
+  }
   const modelBridge = createModelBridge(
     config.backend,
     {
