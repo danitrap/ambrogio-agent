@@ -21,14 +21,14 @@ Generated from task metadata in SQLite state store.
 HEADER
 
 # Parse and generate analytics
-echo "$metadata_json" | python3 - "$OUTPUT" <<'PY'
+python3 - "$OUTPUT" "$metadata_json" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 from collections import defaultdict
 
-metadata_json = sys.stdin.read()
 output_file = sys.argv[1]
+metadata_json = sys.argv[2]
 
 try:
     data = json.loads(metadata_json)

@@ -21,13 +21,13 @@ Generated from SQLite state store.
 HEADER
 
 # Parse and format notes by type
-echo "$notes_json" | python3 - "$OUTPUT" <<'PY'
+python3 - "$OUTPUT" "$notes_json" <<'PY'
 import json
 import sys
 from datetime import datetime
 
-notes_json = sys.stdin.read()
 output_file = sys.argv[1]
+notes_json = sys.argv[2]
 
 try:
     data = json.loads(notes_json)
