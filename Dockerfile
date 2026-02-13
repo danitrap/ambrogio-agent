@@ -29,11 +29,6 @@ RUN npm install -g @openai/codex agent-browser \
   && agent-browser --version
 RUN agent-browser install
 
-# Install Claude Code CLI
-RUN curl -fsSL https://claude.ai/install.sh | bash \
-  && export PATH="$HOME/.local/bin:$PATH" \
-  && claude --version || echo "Claude CLI installed but needs authentication"
-
 COPY package.json bun.lock tsconfig.json ./
 RUN bun install --frozen-lockfile
 
@@ -47,6 +42,11 @@ RUN echo '#!/bin/bash\nexec bun run /app/src/cli/ambrogioctl.ts "$@"' > /usr/loc
 
 RUN groupadd --system ambrogio-agent && useradd --system --gid ambrogio-agent --create-home ambrogio-agent
 USER ambrogio-agent
+
+# Install Claude Code CLI as the runtime user
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+  && echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+ENV PATH="/home/ambrogio-agent/.local/bin:${PATH}"
 
 ENV NODE_ENV=production
 ENV CLAUDE_HOME=/data/.claude
