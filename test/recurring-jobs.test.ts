@@ -373,4 +373,107 @@ describe("Time Calculations", () => {
 
     expect(Math.abs(nextRunTime.getTime() - expectedTime.getTime())).toBeLessThan(5000);
   });
+
+  test("should respect day-of-week constraint in cron expressions", () => {
+    const taskId = "rc-test-dow-1";
+    const runAt = new Date(Date.now() + 60000).toISOString();
+
+    // Test cron for Monday, Wednesday, Friday at 06:46
+    stateStore.createRecurringJob({
+      jobId: taskId,
+      updateId: 0,
+      userId: 123,
+      chatId: 123,
+      prompt: "Test day-of-week",
+      requestPreview: "Test day-of-week",
+      runAt,
+      recurrenceType: "cron",
+      recurrenceExpression: "46 6 * * 1,3,5", // Monday, Wednesday, Friday
+    });
+
+    stateStore.claimScheduledJob(taskId);
+    stateStore.rescheduleRecurringJob(taskId, "Test");
+
+    const job = stateStore.getBackgroundJob(taskId);
+    const nextRunTime = new Date(job!.runAt!);
+    const dayOfWeek = nextRunTime.getDay(); // 0 (Sunday) to 6 (Saturday)
+
+    // Verify that next run is on Monday (1), Wednesday (3), or Friday (5)
+    expect([1, 3, 5]).toContain(dayOfWeek);
+
+    // Verify the time is set correctly
+    expect(nextRunTime.getHours()).toBe(6);
+    expect(nextRunTime.getMinutes()).toBe(46);
+  });
+
+  test("should skip to next valid day when current day is not allowed", () => {
+    const taskId = "rc-test-dow-2";
+
+    // Get a Saturday or Sunday
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+
+    // If today is Monday-Friday, set time to past so it skips to next occurrence
+    if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+      now.setHours(7, 0, 0, 0); // Past 06:46
+    }
+
+    const runAt = now.toISOString();
+
+    // Cron for Monday only at 06:46
+    stateStore.createRecurringJob({
+      jobId: taskId,
+      updateId: 0,
+      userId: 123,
+      chatId: 123,
+      prompt: "Test skip to Monday",
+      requestPreview: "Test skip to Monday",
+      runAt,
+      recurrenceType: "cron",
+      recurrenceExpression: "46 6 * * 1", // Monday only
+    });
+
+    stateStore.claimScheduledJob(taskId);
+    stateStore.rescheduleRecurringJob(taskId, "Test");
+
+    const job = stateStore.getBackgroundJob(taskId);
+    const nextRunTime = new Date(job!.runAt!);
+    const nextDayOfWeek = nextRunTime.getDay();
+
+    // Verify next run is on Monday
+    expect(nextDayOfWeek).toBe(1);
+    expect(nextRunTime.getHours()).toBe(6);
+    expect(nextRunTime.getMinutes()).toBe(46);
+  });
+
+  test("should handle day-of-week ranges", () => {
+    const taskId = "rc-test-dow-3";
+    const runAt = new Date(Date.now() + 60000).toISOString();
+
+    // Test cron for Monday-Friday (weekdays) at 09:00
+    stateStore.createRecurringJob({
+      jobId: taskId,
+      updateId: 0,
+      userId: 123,
+      chatId: 123,
+      prompt: "Test weekdays",
+      requestPreview: "Test weekdays",
+      runAt,
+      recurrenceType: "cron",
+      recurrenceExpression: "0 9 * * 1-5", // Monday to Friday
+    });
+
+    stateStore.claimScheduledJob(taskId);
+    stateStore.rescheduleRecurringJob(taskId, "Test");
+
+    const job = stateStore.getBackgroundJob(taskId);
+    const nextRunTime = new Date(job!.runAt!);
+    const dayOfWeek = nextRunTime.getDay();
+
+    // Verify next run is on a weekday (1-5)
+    expect(dayOfWeek).toBeGreaterThanOrEqual(1);
+    expect(dayOfWeek).toBeLessThanOrEqual(5);
+    expect(nextRunTime.getHours()).toBe(9);
+    expect(nextRunTime.getMinutes()).toBe(0);
+  });
 });

@@ -780,7 +780,7 @@ export class StateStore {
       return next.toISOString();
     } else if (recurrenceType === "cron") {
       // Basic cron support for common patterns
-      // Format: "minute hour * * *"
+      // Format: "minute hour day month day-of-week"
       const parts = recurrenceExpression.trim().split(/\s+/);
       if (parts.length < 5) {
         throw new Error(`Invalid cron expression: ${recurrenceExpression}`);
@@ -788,11 +788,14 @@ export class StateStore {
 
       const minute = parts[0];
       const hour = parts[1];
+      const dayOfWeek = parts[4]; // 0-6 or 0-7 (0 or 7 is Sunday)
+
       if (!minute || !hour) {
         throw new Error(`Invalid cron expression: ${recurrenceExpression}`);
       }
 
-      const next = new Date();
+      const now = new Date();
+      let next = new Date();
 
       // Parse hour (support basic patterns like "9" or "*/2")
       let targetHour: number;
@@ -814,15 +817,57 @@ export class StateStore {
 
       next.setHours(targetHour, targetMinute, 0, 0);
 
-      // If the calculated time is in the past, move to next occurrence
-      if (next <= new Date()) {
-        if (hour.startsWith("*/")) {
-          const interval = parseInt(hour.slice(2), 10);
-          next.setHours(next.getHours() + interval);
-        } else if (hour === "*") {
-          next.setHours(next.getHours() + 1);
-        } else {
+      // Handle day-of-week constraint if specified
+      if (dayOfWeek && dayOfWeek !== "*") {
+        // Parse allowed days (e.g., "1,3,5" or "1-5")
+        const allowedDays: number[] = [];
+
+        for (const part of dayOfWeek.split(",")) {
+          if (part.includes("-")) {
+            const [start, end] = part.split("-").map((d) => parseInt(d.trim(), 10));
+            if (start !== undefined && end !== undefined) {
+              for (let d = start; d <= end; d++) {
+                allowedDays.push(d === 7 ? 0 : d); // Convert 7 to 0 (both represent Sunday)
+              }
+            }
+          } else {
+            const day = parseInt(part.trim(), 10);
+            allowedDays.push(day === 7 ? 0 : day);
+          }
+        }
+
+        // Find the next occurrence that matches the day-of-week constraint
+        let attempts = 0;
+        const maxAttempts = 14; // Maximum 2 weeks to find a matching day
+
+        while (attempts < maxAttempts) {
+          const currentDay = next.getDay(); // 0 (Sunday) to 6 (Saturday)
+
+          if (allowedDays.includes(currentDay) && next > now) {
+            // Found a valid day that's in the future
+            break;
+          }
+
+          // Move to the next day at the same time
           next.setDate(next.getDate() + 1);
+          next.setHours(targetHour, targetMinute, 0, 0);
+          attempts++;
+        }
+
+        if (attempts >= maxAttempts) {
+          throw new Error(`Could not find next run time for cron expression: ${recurrenceExpression}`);
+        }
+      } else {
+        // No day-of-week constraint, just check if time is in the future
+        if (next <= now) {
+          if (hour.startsWith("*/")) {
+            const interval = parseInt(hour.slice(2), 10);
+            next.setHours(next.getHours() + interval);
+          } else if (hour === "*") {
+            next.setHours(next.getHours() + 1);
+          } else {
+            next.setDate(next.getDate() + 1);
+          }
         }
       }
 
@@ -847,7 +892,52 @@ export class StateStore {
     mutedUntil?: string | null;
   }): void {
     const now = new Date().toISOString();
-    const runAtIso = new Date(params.runAt).toISOString();
+
+    // For cron jobs with day-of-week constraints, validate that runAt matches the schedule
+    // If not, calculate the next valid run time
+    let runAtIso: string;
+    if (params.recurrenceType === "cron") {
+      // Check if the provided runAt matches the cron expression
+      const providedDate = new Date(params.runAt);
+      const parts = params.recurrenceExpression.trim().split(/\s+/);
+
+      if (parts.length >= 5 && parts[4] && parts[4] !== "*") {
+        // Has day-of-week constraint
+        const dayOfWeek = parts[4];
+        const allowedDays: number[] = [];
+
+        for (const part of dayOfWeek.split(",")) {
+          if (part.includes("-")) {
+            const [start, end] = part.split("-").map((d) => parseInt(d.trim(), 10));
+            if (start !== undefined && end !== undefined) {
+              for (let d = start; d <= end; d++) {
+                allowedDays.push(d === 7 ? 0 : d);
+              }
+            }
+          } else {
+            const day = parseInt(part.trim(), 10);
+            allowedDays.push(day === 7 ? 0 : day);
+          }
+        }
+
+        const currentDay = providedDate.getDay();
+        if (!allowedDays.includes(currentDay) || providedDate <= new Date()) {
+          // Provided date doesn't match constraint or is in the past, calculate next valid run
+          runAtIso = this.calculateNextRunTime(params.recurrenceType, params.recurrenceExpression);
+        } else {
+          runAtIso = new Date(params.runAt).toISOString();
+        }
+      } else {
+        // No day-of-week constraint or wildcard, use provided date or calculate next
+        runAtIso = new Date(params.runAt) <= new Date()
+          ? this.calculateNextRunTime(params.recurrenceType, params.recurrenceExpression)
+          : new Date(params.runAt).toISOString();
+      }
+    } else {
+      // For interval-based jobs, use the provided date
+      runAtIso = new Date(params.runAt).toISOString();
+    }
+
     this.db.run(
       `INSERT INTO jobs (
         task_id, kind, update_id, user_id, chat_id, command, payload_prompt, run_at, request_preview, status,
