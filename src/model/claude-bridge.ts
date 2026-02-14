@@ -19,6 +19,8 @@ type ClaudeJsonResponse = {
   is_error?: boolean;
   result: string;
   duration_ms?: number;
+  duration_api_ms?: number;
+  num_turns?: number;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -29,6 +31,14 @@ type ClaudeJsonResponse = {
       web_fetch_requests?: number;
     };
   };
+  modelUsage?: Record<string, {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    webSearchRequests?: number;
+    costUSD?: number;
+  }>;
   session_id?: string;
   total_cost_usd?: number;
   stop_reason?: string | null;
@@ -81,6 +91,55 @@ export function extractClaudeAuditActions(
   return actions;
 }
 
+export function extractClaudeExecutionDetails(
+  jsonResponse: ClaudeJsonResponse,
+): Record<string, unknown> {
+  const details: Record<string, unknown> = {};
+
+  if (jsonResponse.num_turns !== undefined) {
+    details.numTurns = jsonResponse.num_turns;
+  }
+
+  if (jsonResponse.duration_ms !== undefined) {
+    details.durationMs = jsonResponse.duration_ms;
+  }
+
+  if (jsonResponse.duration_api_ms !== undefined) {
+    details.durationApiMs = jsonResponse.duration_api_ms;
+  }
+
+  if (jsonResponse.total_cost_usd !== undefined) {
+    details.totalCostUsd = jsonResponse.total_cost_usd;
+  }
+
+  if (jsonResponse.usage) {
+    const usage = jsonResponse.usage;
+    details.usage = {
+      inputTokens: usage.input_tokens ?? 0,
+      outputTokens: usage.output_tokens ?? 0,
+      cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+      cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
+    };
+
+    if (usage.server_tool_use) {
+      details.toolUse = {
+        webSearches: usage.server_tool_use.web_search_requests ?? 0,
+        webFetches: usage.server_tool_use.web_fetch_requests ?? 0,
+      };
+    }
+  }
+
+  if (jsonResponse.modelUsage) {
+    const modelNames = Object.keys(jsonResponse.modelUsage);
+    if (modelNames.length > 0) {
+      details.models = modelNames;
+      details.modelUsage = jsonResponse.modelUsage;
+    }
+  }
+
+  return details;
+}
+
 export class ClaudeBridge implements ModelBridge {
   private readonly cwd?: string;
   private readonly rootDir: string;
@@ -105,6 +164,7 @@ export class ClaudeBridge implements ModelBridge {
     const prompt = buildPromptText(request);
 
     const hasDangerFlag = this.args.includes("--dangerously-skip-permissions");
+    const hasVerboseFlag = this.args.includes("--verbose");
     const execArgs = [
       "-p",
       "--output-format",
@@ -113,6 +173,7 @@ export class ClaudeBridge implements ModelBridge {
       "--add-dir",
       this.cwd ?? this.rootDir,
       ...(hasDangerFlag ? this.args : ["--dangerously-skip-permissions", ...this.args]),
+      ...(hasVerboseFlag ? [] : ["--verbose"]),
     ];
     const execCommand = this.command;
     this.lastExecutionSummary = {
@@ -187,6 +248,8 @@ export class ClaudeBridge implements ModelBridge {
         ...correlationFields({ requestId }),
         command: execCommand,
         exitCode,
+        stdout,
+        stderr,
         stdoutLength: stdout.length,
         stderrLength: stderr.length,
       });
@@ -196,18 +259,44 @@ export class ClaudeBridge implements ModelBridge {
 
       // Try parsing JSON response
       try {
-        jsonResponse = JSON.parse(stdout) as ClaudeJsonResponse;
-        text = jsonResponse.result ?? "";
+        const parsed = JSON.parse(stdout);
 
-        const auditActions = extractClaudeAuditActions(jsonResponse);
-        if (auditActions.length > 0) {
-          this.logger.info("claude_exec_audit", {
-            ...correlationFields({ requestId }),
-            command: execCommand,
-            exitCode,
-            auditActionCount: auditActions.length,
-            auditActions,
-          });
+        // Handle verbose mode: array of objects with last one being the result
+        if (Array.isArray(parsed)) {
+          // Find the last object with type: "result"
+          const resultObj = parsed.findLast((item: any) => item?.type === "result");
+          if (resultObj) {
+            jsonResponse = resultObj as ClaudeJsonResponse;
+          }
+        } else {
+          // Normal mode: single object
+          jsonResponse = parsed as ClaudeJsonResponse;
+        }
+
+        if (jsonResponse) {
+          text = jsonResponse.result ?? "";
+
+          // Log detailed execution info (similar to Codex stderr parsing)
+          const executionDetails = extractClaudeExecutionDetails(jsonResponse);
+          if (Object.keys(executionDetails).length > 0) {
+            this.logger.info("claude_exec_details", {
+              ...correlationFields({ requestId }),
+              command: execCommand,
+              exitCode,
+              ...executionDetails,
+            });
+          }
+
+          const auditActions = extractClaudeAuditActions(jsonResponse);
+          if (auditActions.length > 0) {
+            this.logger.info("claude_exec_audit", {
+              ...correlationFields({ requestId }),
+              command: execCommand,
+              exitCode,
+              auditActionCount: auditActions.length,
+              auditActions,
+            });
+          }
         }
       } catch {
         // JSON parse failed - fall back to raw stdout
