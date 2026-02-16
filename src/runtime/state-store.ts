@@ -754,6 +754,227 @@ export class StateStore {
 
   // Recurring job methods
 
+  private validateCronExpression(expr: string): void {
+    const parts = expr.trim().split(/\s+/);
+
+    // Require exactly 5 fields
+    if (parts.length !== 5) {
+      throw new Error(`BAD_REQUEST: Cron expression must have exactly 5 fields (minute hour day month day-of-week), got ${parts.length}. Example: '0 9 * * *'`);
+    }
+
+    const [minute, hour, day, month, dayOfWeek] = parts;
+    if (!minute || !hour || !day || !month || !dayOfWeek) {
+      throw new Error("BAD_REQUEST: Cron expression has empty fields. Example: '0 9 * * *'");
+    }
+
+    // Validate minute (0-59, *, or */N)
+    if (minute !== "*" && !minute.startsWith("*/")) {
+      const m = parseInt(minute, 10);
+      if (Number.isNaN(m) || m < 0 || m > 59) {
+        throw new Error(`BAD_REQUEST: Invalid minute value: '${minute}' (must be 0-59, *, or */N). Example: '30 9 * * *'`);
+      }
+    } else if (minute.startsWith("*/")) {
+      const interval = parseInt(minute.slice(2), 10);
+      if (Number.isNaN(interval) || interval <= 0) {
+        throw new Error(`BAD_REQUEST: Invalid minute interval: '${minute}'. Example: '*/15 * * * *'`);
+      }
+    }
+
+    // Validate hour (0-23, *, or */N)
+    if (hour !== "*" && !hour.startsWith("*/")) {
+      const h = parseInt(hour, 10);
+      if (Number.isNaN(h) || h < 0 || h > 23) {
+        throw new Error(`BAD_REQUEST: Invalid hour value: '${hour}' (must be 0-23, *, or */N). Example: '0 14 * * *'`);
+      }
+    } else if (hour.startsWith("*/")) {
+      const interval = parseInt(hour.slice(2), 10);
+      if (Number.isNaN(interval) || interval <= 0) {
+        throw new Error(`BAD_REQUEST: Invalid hour interval: '${hour}'. Example: '0 */2 * * *'`);
+      }
+    }
+
+    // Validate day-of-month (1-31, L, *, ranges, lists)
+    if (day !== "*" && day !== "L") {
+      for (const part of day.split(",")) {
+        const trimmedPart = part.trim();
+        if (trimmedPart.includes("-")) {
+          // Range validation
+          const range = trimmedPart.split("-");
+          if (range.length !== 2) {
+            throw new Error(`BAD_REQUEST: Invalid day-of-month range: '${trimmedPart}'. Example: '1-7' for first week`);
+          }
+          const start = parseInt(range[0]?.trim() ?? "", 10);
+          const end = parseInt(range[1]?.trim() ?? "", 10);
+          if (Number.isNaN(start) || Number.isNaN(end) || start < 1 || start > 31 || end < 1 || end > 31) {
+            throw new Error(`BAD_REQUEST: Invalid day-of-month range: '${trimmedPart}' (must be 1-31). Example: '1-7'`);
+          }
+          if (start > end) {
+            throw new Error(`BAD_REQUEST: Invalid day-of-month range: '${trimmedPart}' (start must be ≤ end)`);
+          }
+        } else {
+          // Single value validation
+          const d = parseInt(trimmedPart, 10);
+          if (Number.isNaN(d) || d < 1 || d > 31) {
+            throw new Error(`BAD_REQUEST: Invalid day-of-month value: '${trimmedPart}' (must be 1-31, L, *, or range/list). Example: '15' for 15th of month`);
+          }
+        }
+      }
+    }
+
+    // Validate month (1-12, JAN-DEC, *, ranges, lists)
+    if (month !== "*") {
+      for (const part of month.split(",")) {
+        const trimmedPart = part.trim();
+        if (trimmedPart.includes("-")) {
+          // Range validation
+          const range = trimmedPart.split("-");
+          if (range.length !== 2) {
+            throw new Error(`BAD_REQUEST: Invalid month range: '${trimmedPart}'. Example: '1-6' for Jan-Jun`);
+          }
+          const start = this.parseMonthValue(range[0]?.trim() ?? "");
+          const end = this.parseMonthValue(range[1]?.trim() ?? "");
+          if (start < 1 || start > 12 || end < 1 || end > 12) {
+            throw new Error(`BAD_REQUEST: Invalid month range: '${trimmedPart}' (must be 1-12 or JAN-DEC)`);
+          }
+          if (start > end) {
+            throw new Error(`BAD_REQUEST: Invalid month range: '${trimmedPart}' (start must be ≤ end)`);
+          }
+        } else {
+          // Single value validation
+          const m = this.parseMonthValue(trimmedPart);
+          if (m < 1 || m > 12) {
+            throw new Error(`BAD_REQUEST: Invalid month value: '${trimmedPart}' (must be 1-12, JAN-DEC, *, or range/list). Example: 'JAN' or '1'`);
+          }
+        }
+      }
+    }
+
+    // Validate day-of-week (0-7, ranges, comma-separated lists)
+    if (dayOfWeek !== "*") {
+      for (const part of dayOfWeek.split(",")) {
+        const trimmedPart = part.trim();
+        if (trimmedPart.includes("-")) {
+          // Range validation (e.g., "1-5" for Mon-Fri)
+          const range = trimmedPart.split("-");
+          if (range.length !== 2) {
+            throw new Error(`BAD_REQUEST: Invalid day-of-week range: '${trimmedPart}'. Example: '1-5' for Mon-Fri`);
+          }
+          const start = parseInt(range[0]?.trim() ?? "", 10);
+          const end = parseInt(range[1]?.trim() ?? "", 10);
+          if (Number.isNaN(start) || Number.isNaN(end) || start < 0 || start > 7 || end < 0 || end > 7) {
+            throw new Error(`BAD_REQUEST: Invalid day-of-week range: '${trimmedPart}' (must be 0-7). Example: '1-5' for Mon-Fri`);
+          }
+          if (start > end) {
+            throw new Error(`BAD_REQUEST: Invalid day-of-week range: '${trimmedPart}' (start must be ≤ end). Example: '1-5' not '5-1'`);
+          }
+        } else {
+          // Single value validation
+          const d = parseInt(trimmedPart, 10);
+          if (Number.isNaN(d) || d < 0 || d > 7) {
+            throw new Error(`BAD_REQUEST: Invalid day-of-week value: '${trimmedPart}' (must be 0-7, where 0=Sunday, 6=Saturday, 7=Sunday). Example: '0 9 * * 1-5' for weekdays`);
+          }
+        }
+      }
+    }
+  }
+
+  private parseMonthValue(value: string): number {
+    const monthNames: { [key: string]: number } = {
+      'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4,
+      'MAY': 5, 'JUN': 6, 'JUL': 7, 'AUG': 8,
+      'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12
+    };
+
+    const upper = value.toUpperCase();
+    return monthNames[upper] ?? parseInt(value, 10);
+  }
+
+  private parseDayOfMonthField(dayOfMonth: string): number[] | 'L' | null {
+    if (dayOfMonth === '*') return null;
+    if (dayOfMonth === 'L') return 'L';  // Special marker for last day of month
+
+    const days: number[] = [];
+
+    for (const part of dayOfMonth.split(',')) {
+      const trimmedPart = part.trim();
+      if (trimmedPart.includes('-')) {
+        // Range: "1-7" for first week
+        const [start, end] = trimmedPart.split('-').map(d => parseInt(d.trim(), 10));
+        if (start !== undefined && end !== undefined) {
+          for (let d = start; d <= end; d++) {
+            days.push(d);
+          }
+        }
+      } else {
+        days.push(parseInt(trimmedPart, 10));
+      }
+    }
+
+    return days;
+  }
+
+  private parseMonthField(month: string): number[] | null {
+    if (month === '*') return null;
+
+    const months: number[] = [];
+
+    for (const part of month.split(',')) {
+      const trimmedPart = part.trim();
+      if (trimmedPart.includes('-')) {
+        // Range: "1-6" or "JAN-JUN"
+        const [start, end] = trimmedPart.split('-');
+        const startMonth = this.parseMonthValue(start?.trim() ?? "");
+        const endMonth = this.parseMonthValue(end?.trim() ?? "");
+        for (let m = startMonth; m <= endMonth; m++) {
+          months.push(m);
+        }
+      } else {
+        months.push(this.parseMonthValue(trimmedPart));
+      }
+    }
+
+    return months;
+  }
+
+  private getDaysInMonth(year: number, month: number): number {
+    // month is 1-12 (not 0-11 like JavaScript Date)
+    return new Date(year, month, 0).getDate();
+  }
+
+  private validateIntervalExpression(expr: string): void {
+    const match = expr.match(/^(\d+)([mhd])$/);
+
+    if (!match || !match[1] || !match[2]) {
+      throw new Error(`BAD_REQUEST: Invalid interval format: '${expr}' (expected format: <number><unit> where unit is m, h, or d). Example: '30m', '2h', '7d'`);
+    }
+
+    const amountStr = match[1];
+    const unit = match[2];
+    const amount = parseInt(amountStr, 10);
+
+    // Validate amount is positive
+    if (Number.isNaN(amount) || amount <= 0) {
+      throw new Error(`BAD_REQUEST: Interval amount must be positive, got: ${expr}. Example: '30m' not '0m'`);
+    }
+
+    // Validate unit
+    if (unit !== 'm' && unit !== 'h' && unit !== 'd') {
+      throw new Error(`BAD_REQUEST: Invalid interval unit: '${unit}' (must be 'm' for minutes, 'h' for hours, or 'd' for days). Example: '30m'`);
+    }
+
+    // Validate reasonable limits to prevent overflow
+    const limits = {
+      m: 525600,  // 1 year in minutes
+      h: 8760,    // 1 year in hours
+      d: 365,     // 1 year in days
+    };
+
+    const maxAmount = limits[unit];
+    if (amount > maxAmount) {
+      throw new Error(`BAD_REQUEST: Interval too large: ${amount}${unit} (maximum: ${maxAmount}${unit}). Consider using a larger time unit.`);
+    }
+  }
+
   private calculateNextRunTime(recurrenceType: RecurrenceType, recurrenceExpression: string): string {
     if (recurrenceType === "interval") {
       const match = recurrenceExpression.match(/^(\d+)([mhd])$/);
@@ -779,7 +1000,7 @@ export class StateStore {
       }
       return next.toISOString();
     } else if (recurrenceType === "cron") {
-      // Basic cron support for common patterns
+      // Full cron support with day-of-month and month constraints
       // Format: "minute hour day month day-of-week"
       const parts = recurrenceExpression.trim().split(/\s+/);
       if (parts.length < 5) {
@@ -788,9 +1009,11 @@ export class StateStore {
 
       const minute = parts[0];
       const hour = parts[1];
-      const dayOfWeek = parts[4]; // 0-6 or 0-7 (0 or 7 is Sunday)
+      const dayOfMonth = parts[2];
+      const month = parts[3];
+      const dayOfWeek = parts[4];
 
-      if (!minute || !hour) {
+      if (!minute || !hour || !dayOfMonth || !month || !dayOfWeek) {
         throw new Error(`Invalid cron expression: ${recurrenceExpression}`);
       }
 
@@ -815,13 +1038,14 @@ export class StateStore {
       // Parse minute
       const targetMinute = minute === "*" ? 0 : parseInt(minute, 10);
 
-      next.setHours(targetHour, targetMinute, 0, 0);
+      // Parse day-of-month and month constraints
+      const allowedDaysOfMonth = this.parseDayOfMonthField(dayOfMonth);
+      const allowedMonths = this.parseMonthField(month);
 
-      // Handle day-of-week constraint if specified
+      // Parse day-of-week (existing logic)
+      let allowedDaysOfWeek: number[] | null = null;
       if (dayOfWeek && dayOfWeek !== "*") {
-        // Parse allowed days (e.g., "1,3,5" or "1-5")
         const allowedDays: number[] = [];
-
         for (const part of dayOfWeek.split(",")) {
           if (part.includes("-")) {
             const [start, end] = part.split("-").map((d) => parseInt(d.trim(), 10));
@@ -835,48 +1059,125 @@ export class StateStore {
             allowedDays.push(day === 7 ? 0 : day);
           }
         }
+        allowedDaysOfWeek = allowedDays;
+      }
 
-        // Find the next occurrence that matches the day-of-week constraint
-        let attempts = 0;
-        const maxAttempts = 14; // Maximum 2 weeks to find a matching day
+      // Set initial time
+      next.setHours(targetHour, targetMinute, 0, 0);
 
-        while (attempts < maxAttempts) {
-          const currentDay = next.getDay(); // 0 (Sunday) to 6 (Saturday)
-
-          if (allowedDays.includes(currentDay) && next > now) {
-            // Found a valid day that's in the future
-            break;
-          }
-
-          // Move to the next day at the same time
+      // Advance if time already passed
+      if (next <= now) {
+        if (hour.startsWith("*/")) {
+          const interval = parseInt(hour.slice(2), 10);
+          next.setHours(next.getHours() + interval);
+        } else if (hour === "*") {
+          next.setHours(next.getHours() + 1);
+        } else {
           next.setDate(next.getDate() + 1);
-          next.setHours(targetHour, targetMinute, 0, 0);
-          attempts++;
-        }
-
-        if (attempts >= maxAttempts) {
-          throw new Error(`Could not find next run time for cron expression: ${recurrenceExpression}`);
-        }
-      } else {
-        // No day-of-week constraint, just check if time is in the future
-        if (next <= now) {
-          if (hour.startsWith("*/")) {
-            const interval = parseInt(hour.slice(2), 10);
-            next.setHours(next.getHours() + interval);
-          } else if (hour === "*") {
-            next.setHours(next.getHours() + 1);
-          } else {
-            next.setDate(next.getDate() + 1);
-          }
         }
       }
 
-      return next.toISOString();
+      // Find next valid date with all constraints
+      let attempts = 0;
+      const maxAttempts = 732; // 2 years to handle month/day-of-month combinations
+
+      while (attempts < maxAttempts) {
+        const nextYear = next.getFullYear();
+        const nextMonth = next.getMonth() + 1; // 1-12
+        const nextDayOfMonth = next.getDate();
+        const nextDayOfWeek = next.getDay(); // 0-6
+
+        // Check month constraint
+        const monthValid = !allowedMonths || allowedMonths.includes(nextMonth);
+
+        // Check day-of-month constraint (with month boundary handling)
+        let dayOfMonthValid = true;
+        if (allowedDaysOfMonth !== null) {
+          const daysInMonth = this.getDaysInMonth(nextYear, nextMonth);
+
+          if (allowedDaysOfMonth === 'L') {
+            // Last day of month
+            dayOfMonthValid = (nextDayOfMonth === daysInMonth);
+          } else {
+            // Filter days that exist in this month (e.g., skip 31 in April)
+            const validDays = allowedDaysOfMonth.filter(d => d <= daysInMonth);
+            dayOfMonthValid = validDays.includes(nextDayOfMonth);
+          }
+        }
+
+        // Check day-of-week constraint
+        const dayOfWeekValid = !allowedDaysOfWeek || allowedDaysOfWeek.includes(nextDayOfWeek);
+
+        // Apply OR logic: if both day constraints exist, accept either
+        const hasDayOfMonth = allowedDaysOfMonth !== null;
+        const hasDayOfWeek = allowedDaysOfWeek !== null;
+
+        let dayValid: boolean;
+        if (hasDayOfMonth && hasDayOfWeek) {
+          // Both specified: OR logic (traditional cron behavior)
+          dayValid = dayOfMonthValid || dayOfWeekValid;
+        } else if (hasDayOfMonth) {
+          dayValid = dayOfMonthValid;
+        } else if (hasDayOfWeek) {
+          dayValid = dayOfWeekValid;
+        } else {
+          dayValid = true; // No day constraints
+        }
+
+        // Accept if all constraints met and in future
+        if (monthValid && dayValid && next > now) {
+          return next.toISOString();
+        }
+
+        // Advance to next day
+        next.setDate(next.getDate() + 1);
+        next.setHours(targetHour, targetMinute, 0, 0);
+        attempts++;
+      }
+
+      throw new Error(`Could not find next run time within 2 years for cron expression: ${recurrenceExpression}`);
     }
 
     throw new Error(`Unsupported recurrence type: ${recurrenceType}`);
   }
 
+  /**
+   * Creates a recurring job with interval or cron scheduling.
+   *
+   * Cron format: "minute hour day-of-month month day-of-week"
+   *
+   * Supported cron features:
+   * - Minute: 0-59, wildcard, intervals, ranges, lists
+   * - Hour: 0-23, wildcard, intervals, ranges, lists
+   * - Day-of-month: 1-31, L (last day), wildcard, ranges, lists
+   * - Month: 1-12, JAN-DEC, wildcard, ranges, lists
+   * - Day-of-week: 0-7 (0 and 7 are Sunday), wildcard, ranges, lists
+   *
+   * Day constraint logic:
+   * When both day-of-month and day-of-week are specified, uses OR logic (traditional cron).
+   * For example, "0 9 15 1" runs on the 15th OR Mondays, not just when 15th is a Monday.
+   *
+   * Month boundaries:
+   * - Day 31 in 30-day months: Skips those months (Apr, Jun, Sep, Nov)
+   * - Day 30-31 in February: Skips February entirely
+   * - February 29: Only runs on leap years
+   * - Last day "L": Runs on 28/29/30/31 depending on month length
+   *
+   * Cron examples:
+   * - "0 9 1 wildcard wildcard" - 1st of every month at 9am
+   * - "0 9 15 wildcard wildcard" - 15th of every month at 9am
+   * - "0 17 L wildcard wildcard" - Last day of month at 5pm
+   * - "0 9 wildcard 1-6 wildcard" - Every day Jan-Jun at 9am
+   * - "0 0 1 1 wildcard" - New Year (Jan 1st midnight)
+   *
+   * Interval format: number + unit (m=minutes, h=hours, d=days)
+   * - Maximum intervals: 525600m, 8760h, 365d (1 year)
+   * - Examples: "30m" (every 30 minutes), "2h" (every 2 hours), "7d" (every 7 days)
+   *
+   * Timezone: All times interpreted in system local timezone
+   *
+   * @throws Error with BAD_REQUEST prefix for invalid expressions
+   */
   createRecurringJob(params: {
     jobId: string;
     updateId: number;
@@ -892,6 +1193,15 @@ export class StateStore {
     mutedUntil?: string | null;
   }): void {
     const now = new Date().toISOString();
+
+    // Validate expression before processing
+    if (params.recurrenceType === "cron") {
+      this.validateCronExpression(params.recurrenceExpression);
+    } else if (params.recurrenceType === "interval") {
+      this.validateIntervalExpression(params.recurrenceExpression);
+    } else {
+      throw new Error(`BAD_REQUEST: Invalid recurrence type: '${params.recurrenceType}' (must be 'interval' or 'cron')`);
+    }
 
     // For cron jobs with day-of-week constraints, validate that runAt matches the schedule
     // If not, calculate the next valid run time
@@ -1088,6 +1398,19 @@ export class StateStore {
   }
 
   updateRecurrenceExpression(jobId: string, expression: string): boolean {
+    // Fetch job to determine type, then validate
+    const job = this.getBackgroundJob(jobId);
+    if (!job || job.kind !== 'recurring') {
+      return false;
+    }
+
+    // Validate based on the job's recurrence type
+    if (job.recurrenceType === "cron") {
+      this.validateCronExpression(expression);
+    } else if (job.recurrenceType === "interval") {
+      this.validateIntervalExpression(expression);
+    }
+
     const result = this.db.run(
       `UPDATE jobs
        SET recurrence_expression = ?2,
