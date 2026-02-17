@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildHeartbeatPrompt, runHeartbeatCycle } from "../src/runtime/heartbeat";
+import {
+  buildHeartbeatPrompt,
+  HEARTBEAT_INTERVAL_MS,
+  runHeartbeatCycle,
+} from "../src/runtime/heartbeat";
 
 class StubLogger {
   info(): void {}
@@ -8,6 +12,10 @@ class StubLogger {
 }
 
 describe("heartbeat", () => {
+  test("uses an hourly heartbeat interval", () => {
+    expect(HEARTBEAT_INTERVAL_MS).toBe(60 * 60 * 1000);
+  });
+
   test("buildHeartbeatPrompt returns fixed prompt", () => {
     const prompt = buildHeartbeatPrompt();
     expect(prompt).toBe("Run a heartbeat check.");

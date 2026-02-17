@@ -1,4 +1,4 @@
-export const HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
+export const HEARTBEAT_INTERVAL_MS = 60 * 60 * 1000;
 export const HEARTBEAT_FILE_NAME = "HEARTBEAT.md";
 
 type HeartbeatLogger = {
