@@ -1,46 +1,35 @@
 ---
 name: fake-scanned-pdf
-description: Convert a PDF into a fake phone-scanned PDF using a vendored local script. Use when the user asks to make a PDF look scanned, photocopied, noisy, skewed, or low-quality while preserving multipage output.
+description: Convert a PDF into a fake phone-scanned style PDF using the local vendored script.
 ---
 
 # Fake Scanned PDF
 
-Transform an input PDF into a "phone-scanned" looking PDF with grayscale, mild artifacts, and compression.
+## Use This Skill When
+- The user asks to make a PDF look scanned/photocopied/noisy/skewed.
+
+## Do Not Use This Skill When
+- The input is not a PDF.
+- The user requests OCR or semantic edits to content.
+
+## Required Inputs
+- Absolute input PDF path.
+- Optional output path (must be under `/data/generated/scanned-pdfs/`).
 
 ## Workflow
-
-- Require an input PDF path from the user.
-- Use output paths under `/data/generated/scanned-pdfs/YYYY/MM/DD/` (never write generated files into `/data/attachments`).
-- Optionally accept an explicit output path from the user only if it is under `/data/generated/scanned-pdfs/`.
-- Run the vendored script:
-
+1. Validate input file exists.
+2. Choose output path under `/data/generated/scanned-pdfs/YYYY/MM/DD/` if not provided.
+3. Run:
 ```bash
 bash /data/.codex/skills/fake-scanned-pdf/scripts/fakescanner.sh "<input.pdf>" "<output.pdf>"
 ```
-
-If output is omitted:
-
-```bash
-bash /data/.codex/skills/fake-scanned-pdf/scripts/fakescanner.sh "<input.pdf>"
-```
-
-- After execution, verify that the output file exists.
-- Report the final output path and file size.
-- If user asks Telegram delivery, send via local RPC:
-
+4. Verify output exists and report path + file size.
+5. If asked, send via Telegram:
 ```bash
 ambrogioctl telegram send-document --path "<output.pdf>" --json
 ```
 
 ## Guardrails
-
-- Do not claim success if the script exits non-zero.
-- If dependencies are missing, stop and report the missing binary plus install guidance from `references/requirements.md`.
-- If input does not exist, stop and ask for a valid absolute path.
-- Do not alter script tuning parameters in this skill; use defaults.
-
-## Notes
-
-- The output is rasterized and not vector-preserving.
-- The script is vendored in this skill for reproducibility.
-- See `references/requirements.md` for dependency installation and troubleshooting.
+- Never claim success on non-zero exit.
+- If dependencies are missing, report missing binaries and point to `references/requirements.md`.
+- Do not write generated outputs into `/data/attachments`.

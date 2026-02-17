@@ -1,38 +1,32 @@
 ---
 name: telegram-media-sender
-description: Send local files to Telegram through Ambrogio job RPC using ambrogioctl media commands.
+description: Send local media files to Telegram using `ambrogioctl telegram` commands.
 ---
 
 # Telegram Media Sender
 
-Use this skill when Signor Daniele asks to send a local file/photo/audio on Telegram.
+## Use This Skill When
+- The user asks to send a local file/photo/audio to Telegram.
 
 ## Hard Rules
-
-- Do not use XML-like tags in assistant output.
-- Do not invent file paths.
 - Accept only absolute paths under `/data`.
-- Choose exactly one explicit operation:
-  - photo -> `send-photo`
-  - audio -> `send-audio`
-  - generic file -> `send-document`
-- Do not fallback automatically between media types.
+- Choose one explicit operation only:
+- photo -> `send-photo`
+- audio -> `send-audio`
+- file -> `send-document`
+- Do not auto-fallback to another media type.
 
 ## Workflow
-
-1. Identify target file path and intended media type.
-2. If missing/ambiguous, ask one concise clarification.
-3. Call the matching `ambrogioctl telegram <action> --path "<absolute-path>" --json`.
-
-Where `<action>` is one of:
-- `send-photo`
-- `send-audio`
-- `send-document`
-4. Parse JSON result and report concise confirmation.
+1. Identify file path and media intent.
+2. If ambiguous, ask one concise clarification.
+3. Execute:
+```bash
+ambrogioctl telegram <send-photo|send-audio|send-document> --path "<absolute-path>" --json
+```
+4. Parse JSON result and provide concise confirmation.
 
 ## Error Handling
-
-- `FORBIDDEN_PATH`: explain that path must stay under `/data`.
-- `NOT_FOUND`: report file not found and ask for valid path.
-- `PAYLOAD_TOO_LARGE`: report size limit issue.
-- `INVALID_STATE`: report no authorized chat available yet.
+- `FORBIDDEN_PATH`: path must be under `/data`.
+- `NOT_FOUND`: file missing.
+- `PAYLOAD_TOO_LARGE`: file exceeds Telegram/runtime limits.
+- `INVALID_STATE`: authorized chat/session missing.
