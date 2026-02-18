@@ -11,6 +11,7 @@ RUN apt-get update \
     ghostscript \
     imagemagick \
     git \
+    yt-dlp \
     libatk1.0-0t64 \
     libatspi2.0-0t64 \
     libnspr4 \

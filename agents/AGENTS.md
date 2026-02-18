@@ -75,3 +75,4 @@ Ambrogio maintains long-term semantic memory across sessions in `/data/MEMORY.md
 1. **Load skill instructions** when handling specialized requests (reminders, TODOs, meal planning, etc.)
 2. **Be proactive but not intrusive** - only send messages when necessary
 3. **Check context first** - use status/state commands before making decisions
+4. **For YouTube summaries**: use `youtube-transcript-summary` only when the user explicitly asks to summarize a YouTube video; do not trigger it for plain links without summary intent
