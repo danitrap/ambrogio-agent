@@ -190,6 +190,12 @@ export class ClaudeBridge implements ModelBridge {
       cwd: this.cwd ?? this.rootDir,
       promptLength: prompt.length,
     });
+    this.logger.info("claude_exec_prompt", {
+      ...correlationFields({ requestId }),
+      command: execCommand,
+      promptLength: prompt.length,
+      prompt,
+    });
 
     const process = Bun.spawn([execCommand, ...execArgs], {
       stdin: "pipe",

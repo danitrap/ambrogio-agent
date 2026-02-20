@@ -127,6 +127,12 @@ export class CodexBridge implements ModelBridge {
       promptLength: prompt.length,
       outputPath,
     });
+    this.logger.info("codex_exec_prompt", {
+      ...correlationFields({ requestId }),
+      command: execCommand,
+      promptLength: prompt.length,
+      prompt,
+    });
 
     const process = Bun.spawn([execCommand, ...execArgs], {
       stdin: "pipe",

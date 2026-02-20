@@ -96,4 +96,69 @@ describe("AmbrogioAgentService", () => {
       hasContext: true,
     });
   });
+
+  test("injects personalization hints when relevant memories are available", async () => {
+    const seenMessages: string[] = [];
+    const model: ModelBridge = {
+      respond: async (request) => {
+        seenMessages.push(request.message);
+        return { text: "ok" };
+      },
+    };
+
+    const service = new AmbrogioAgentService({
+      allowlist: new TelegramAllowlist(1),
+      modelBridge: model,
+      logger: new Logger("error"),
+      memoryStore: {
+        getAllRuntimeKeys: () => [
+          {
+            key: "memory:preference:1",
+            updatedAt: "2026-02-20T09:00:00.000Z",
+            value: JSON.stringify({
+              id: "mem-1",
+              type: "preference",
+              content: "Preferisce usare Bun per progetti TypeScript",
+              confidence: 100,
+              status: "active",
+              tags: ["bun", "typescript"],
+              context: "",
+              updatedAt: "2026-02-20T09:00:00.000Z",
+            }),
+          },
+        ],
+      },
+    });
+
+    await service.handleMessage(1, "proponi setup typescript");
+
+    expect(seenMessages).toHaveLength(1);
+    expect(seenMessages[0]).toContain("Personalization hints:");
+    expect(seenMessages[0]?.toLowerCase()).toContain("bun");
+    expect(seenMessages[0]).toContain("Current user request:");
+  });
+
+  test("does not inject personalization hints when no valid memories exist", async () => {
+    const seenMessages: string[] = [];
+    const model: ModelBridge = {
+      respond: async (request) => {
+        seenMessages.push(request.message);
+        return { text: "ok" };
+      },
+    };
+
+    const service = new AmbrogioAgentService({
+      allowlist: new TelegramAllowlist(1),
+      modelBridge: model,
+      logger: new Logger("error"),
+      memoryStore: {
+        getAllRuntimeKeys: () => [],
+      },
+    });
+
+    await service.handleMessage(1, "ciao");
+
+    expect(seenMessages).toHaveLength(1);
+    expect(seenMessages[0]).toBe("ciao");
+  });
 });

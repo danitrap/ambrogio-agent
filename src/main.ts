@@ -312,6 +312,7 @@ async function main(): Promise<void> {
     modelBridge,
     logger,
     conversationStore: stateStore,
+    memoryStore: stateStore,
   });
 
   logger.info("ambrogio_agent_started", {

@@ -1,6 +1,7 @@
 import type { TelegramAllowlist } from "../auth/allowlist";
 import type { Logger } from "../logging/audit";
 import type { ModelBridge } from "../model/types";
+import { buildPersonalizationHints, type MemoryStore } from "../runtime/memory-context";
 
 type ConversationStore = {
   getConversation: (userId: number, limit?: number) => Array<{ role: "user" | "assistant"; text: string }>;
@@ -14,6 +15,7 @@ export type AmbrogioAgentDependencies = {
   modelBridge: ModelBridge;
   logger: Logger;
   conversationStore?: ConversationStore;
+  memoryStore?: MemoryStore;
 };
 
 export class AmbrogioAgentService {
@@ -36,7 +38,11 @@ export class AmbrogioAgentService {
         entries: history.length,
       });
     }
-    const contextualMessage = formatContextualMessage(history, text);
+    const personalizationHints = buildPersonalizationHints({
+      message: text,
+      memoryStore: this.deps.memoryStore,
+    });
+    const contextualMessage = formatContextualMessage(history, text, personalizationHints);
 
     const modelResponse = await this.deps.modelBridge.respond({
       requestId,
@@ -99,15 +105,29 @@ export class AmbrogioAgentService {
   }
 }
 
-function formatContextualMessage(history: Array<{ role: "user" | "assistant"; text: string }>, text: string): string {
-  if (history.length === 0) {
+function formatContextualMessage(
+  history: Array<{ role: "user" | "assistant"; text: string }>,
+  text: string,
+  personalizationHints: string[],
+): string {
+  if (history.length === 0 && personalizationHints.length === 0) {
     return text;
   }
 
-  const serializedHistory = history
-    .slice(-8)
-    .map((entry) => `${entry.role === "user" ? "User" : "Assistant"}: ${entry.text}`)
-    .join("\n");
+  const sections: string[] = [];
 
-  return `Conversation context:\n${serializedHistory}\n\nCurrent user request:\n${text}`;
+  if (personalizationHints.length > 0) {
+    sections.push(`Personalization hints:\n${personalizationHints.join("\n")}`);
+  }
+
+  if (history.length > 0) {
+    const serializedHistory = history
+      .slice(-8)
+      .map((entry) => `${entry.role === "user" ? "User" : "Assistant"}: ${entry.text}`)
+      .join("\n");
+    sections.push(`Conversation context:\n${serializedHistory}`);
+  }
+
+  sections.push(`Current user request:\n${text}`);
+  return sections.join("\n\n");
 }
