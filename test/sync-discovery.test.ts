@@ -43,9 +43,14 @@ test("discoverSyncSkills - finds skills with valid SYNC.json", async () => {
   const skills = await discoverSyncSkills([TEST_ROOT]);
 
   expect(skills.length).toBe(1);
-  expect(skills[0].name).toBe("memory-manager");
-  expect(skills[0].manifest.outputFile).toBe("/data/MEMORY.md");
-  expect(skills[0].skillDir).toBe(path.join(TEST_ROOT, "memory-manager"));
+  const first = skills.at(0);
+  expect(first).toBeDefined();
+  if (!first) {
+    throw new Error("Expected one discovered skill");
+  }
+  expect(first.name).toBe("memory-manager");
+  expect(first.manifest.outputFile).toBe("/data/MEMORY.md");
+  expect(first.skillDir).toBe(path.join(TEST_ROOT, "memory-manager"));
 });
 
 test("discoverSyncSkills - skips skills without SYNC.json", async () => {

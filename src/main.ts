@@ -7,6 +7,7 @@ import { loadConfig } from "./config/env";
 import { Logger } from "./logging/audit";
 import { correlationFields } from "./logging/correlation";
 import { createModelBridge } from "./model/bridge-factory";
+import type { ModelExecutionSummary } from "./model/types";
 import { ElevenLabsTts } from "./model/elevenlabs-tts";
 import { OpenAiTranscriber } from "./model/openai-transcriber";
 import { handleTelegramCommand } from "./runtime/command-handlers";
@@ -58,7 +59,7 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`;
 }
 
-function buildLastLogMessage(summary: ReturnType<ExecBridge["getLastExecutionSummary"]>): string {
+function buildLastLogMessage(summary: ModelExecutionSummary | null | undefined): string {
   if (!summary) {
     return "Nessuna esecuzione codex disponibile ancora.";
   }
@@ -640,7 +641,7 @@ async function main(): Promise<void> {
       second: "2-digit",
       hour12: false,
     }).format(localNow);
-    const summary = modelBridge.getLastExecutionSummary();
+    const summary = modelBridge.getLastExecutionSummary?.();
     const idle = lastTelegramMessageAtMs === null ? "n/a" : formatDuration(nowMs - lastTelegramMessageAtMs);
     const lastTelegramAt = lastTelegramMessageAtMs === null ? "n/a" : new Date(lastTelegramMessageAtMs).toISOString();
     const codexSummary = summary
@@ -912,7 +913,7 @@ async function main(): Promise<void> {
             const uptime = formatDuration(Date.now() - startedAtMs);
             const idle = lastTelegramMessageAtMs === null ? "n/a" : formatDuration(Date.now() - lastTelegramMessageAtMs);
             const lastTelegramAt = lastTelegramMessageAtMs === null ? "n/a" : new Date(lastTelegramMessageAtMs).toISOString();
-            const summary = modelBridge.getLastExecutionSummary();
+            const summary = modelBridge.getLastExecutionSummary?.();
             const lines = [
               "Ambrogio-agent status:",
               `Uptime: ${uptime}`,
@@ -934,7 +935,7 @@ async function main(): Promise<void> {
             ];
             return lines.join("\n");
           },
-          getLastLogReply: () => buildLastLogMessage(modelBridge.getLastExecutionSummary()),
+          getLastLogReply: () => buildLastLogMessage(modelBridge.getLastExecutionSummary?.()),
           getMemoryReply: (userId) => {
             const stats = ambrogioAgent.getConversationStats(userId);
             const lines = [
