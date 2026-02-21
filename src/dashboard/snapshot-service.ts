@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { StateStore } from "../runtime/state-store";
 import { parseGroceriesMarkdown, parseTodoMarkdown } from "./parsers";
@@ -15,12 +16,28 @@ type CreateDashboardSnapshotServiceOptions = {
 
 const HEARTBEAT_STALE_WARN_MINUTES = 90;
 const HEARTBEAT_STALE_CRITICAL_MINUTES = 180;
+const KNOWLEDGE_PREVIEW_MAX_LINES = 24;
 
 async function readTextOrEmpty(filePath: string): Promise<string> {
   try {
     return await readFile(filePath, "utf8");
   } catch {
     return "";
+  }
+}
+
+async function readFileMeta(filePath: string): Promise<{ exists: boolean; updatedAt: string | null }> {
+  try {
+    const data = await stat(filePath);
+    return {
+      exists: true,
+      updatedAt: data.mtime.toISOString(),
+    };
+  } catch {
+    return {
+      exists: false,
+      updatedAt: null,
+    };
   }
 }
 
@@ -38,6 +55,14 @@ function formatDuration(totalSeconds: number): string {
     return `${minutes}m ${seconds}s`;
   }
   return `${seconds}s`;
+}
+
+function toPreviewLines(content: string, maxLines = KNOWLEDGE_PREVIEW_MAX_LINES): string[] {
+  return content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(0, maxLines);
 }
 
 export function createDashboardSnapshotService(
@@ -106,6 +131,17 @@ export function createDashboardSnapshotService(
 
       const todoFile = await readTextOrEmpty(path.join(options.dataRoot, "TODO.md"));
       const groceriesFile = await readTextOrEmpty(path.join(options.dataRoot, "groceries.md"));
+      const memoryFile = await readTextOrEmpty(path.join(options.dataRoot, "MEMORY.md"));
+      const notesFile = await readTextOrEmpty(path.join(options.dataRoot, "NOTES.md"));
+      const memoryFileMeta = await readFileMeta(path.join(options.dataRoot, "MEMORY.md"));
+      const notesFileMeta = await readFileMeta(path.join(options.dataRoot, "NOTES.md"));
+      const memoryEntries = options.stateStore.getAllRuntimeKeys("memory:*").length;
+      const notesEntries = options.stateStore.getAllRuntimeKeys("notes:entry:*").length;
+      const fetchUrlCacheEntries = options.stateStore.getAllRuntimeKeys("fetch-url:cache:*").length;
+      const ttsAudioCacheEntries = options.stateStore.getAllRuntimeKeys("tts:audio:*").length;
+      const atmTramScheduleCacheEntries = options.stateStore.getAllRuntimeKeys("atm-tram-schedule:cache:*").length;
+      const atmTramScheduleGtfsTimestampPresent =
+        options.stateStore.getRuntimeValue("atm-tram-schedule:gtfs:timestamp") !== null;
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
       return {
@@ -138,6 +174,26 @@ export function createDashboardSnapshotService(
         },
         todo: parseTodoMarkdown(todoFile),
         groceries: parseGroceriesMarkdown(groceriesFile),
+        knowledge: {
+          memory: {
+            ...memoryFileMeta,
+            previewLines: toPreviewLines(memoryFile),
+          },
+          notes: {
+            ...notesFileMeta,
+            previewLines: toPreviewLines(notesFile),
+          },
+          stateCounts: {
+            memoryEntries,
+            notesEntries,
+          },
+        },
+        skillState: {
+          fetchUrlCacheEntries,
+          ttsAudioCacheEntries,
+          atmTramScheduleCacheEntries,
+          atmTramScheduleGtfsTimestampPresent,
+        },
       };
     },
   };

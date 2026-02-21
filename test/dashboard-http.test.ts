@@ -35,6 +35,20 @@ describe("startDashboardHttpServer", () => {
       },
       todo: { columns: [] },
       groceries: { columns: [] },
+      knowledge: {
+        memory: { exists: true, updatedAt: "2026-02-21T09:00:00.000Z", previewLines: ["# Memory", "- espresso"] },
+        notes: { exists: true, updatedAt: "2026-02-21T09:00:00.000Z", previewLines: ["# Notes", "## Project"] },
+        stateCounts: {
+          memoryEntries: 2,
+          notesEntries: 3,
+        },
+      },
+      skillState: {
+        fetchUrlCacheEntries: 1,
+        ttsAudioCacheEntries: 1,
+        atmTramScheduleCacheEntries: 1,
+        atmTramScheduleGtfsTimestampPresent: true,
+      },
     };
 
     const handler = createDashboardFetchHandler({
@@ -45,7 +59,9 @@ describe("startDashboardHttpServer", () => {
     const html = await handler(new Request("http://localhost/dashboard"));
     expect(html.status).toBe(200);
     expect(html.headers.get("content-type")).toContain("text/html");
-    expect(await html.text()).toContain("Ambrogio Dashboard");
+    const htmlBody = await html.text();
+    expect(htmlBody).toContain("Ambrogio Dashboard");
+    expect(htmlBody).toContain("Knowledge");
 
     const json = await handler(new Request("http://localhost/dashboard/api/snapshot"));
     expect(json.status).toBe(200);

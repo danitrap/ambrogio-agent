@@ -66,6 +66,19 @@ export function renderDashboardHtml(): string {
     .pill.critical { background: #fef2f2; color: #991b1b; border-color: #fca5a5; }
     .muted { color: var(--muted); font-size: 0.84rem; }
     .board { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    .preview {
+      margin-top: 8px;
+      font-family: ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      white-space: pre-wrap;
+      font-size: 0.8rem;
+      line-height: 1.35;
+      max-height: 260px;
+      overflow: auto;
+      background: #f9fafb;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+    }
     .col { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
     .col h3 { margin: 0 0 8px; font-size: 0.9rem; }
     ul { margin: 0; padding-left: 16px; }
@@ -85,14 +98,18 @@ export function renderDashboardHtml(): string {
       <button class="tab" data-view="health">Health</button>
       <button class="tab" data-view="todos">Todos</button>
       <button class="tab" data-view="groceries">Groceries</button>
+      <button class="tab" data-view="knowledge">Knowledge</button>
+      <button class="tab" data-view="skillstate">Skill State</button>
     </div>
     <section id="calendar" class="view active"></section>
     <section id="health" class="view"></section>
     <section id="todos" class="view"></section>
     <section id="groceries" class="view"></section>
+    <section id="knowledge" class="view"></section>
+    <section id="skillstate" class="view"></section>
   </main>
   <script>
-    const views = ["calendar", "health", "todos", "groceries"];
+    const views = ["calendar", "health", "todos", "groceries", "knowledge", "skillstate"];
     for (const tab of document.querySelectorAll(".tab")) {
       tab.addEventListener("click", () => {
         for (const id of views) document.getElementById(id).classList.remove("active");
@@ -182,6 +199,65 @@ export function renderDashboardHtml(): string {
       \`;
     }
 
+    function renderKnowledge(knowledge) {
+      const el = document.getElementById("knowledge");
+      if (!knowledge) {
+        el.innerHTML = "<p class='muted'>Knowledge data unavailable.</p>";
+        return;
+      }
+      const memory = knowledge.memory || {};
+      const notes = knowledge.notes || {};
+      const counts = knowledge.stateCounts || {};
+      const memoryUpdated = memory.updatedAt ? new Date(memory.updatedAt).toLocaleString() : "n/a";
+      const notesUpdated = notes.updatedAt ? new Date(notes.updatedAt).toLocaleString() : "n/a";
+      const memoryPreview = (memory.previewLines || []).join("\\n");
+      const notesPreview = (notes.previewLines || []).join("\\n");
+      el.innerHTML = \`
+        <div class="health-grid">
+          <article class="health-card">
+            <div class="health-top"><strong>MEMORY.md</strong><span class="pill \${memory.exists ? "ok" : "warn"}">\${memory.exists ? "PRESENT" : "MISSING"}</span></div>
+            <div class="muted">Updated: \${asText(memoryUpdated)}</div>
+            <div class="muted">State entries (memory:*): \${asText(String(counts.memoryEntries || 0))}</div>
+            <div class="preview">\${asText(memoryPreview || "No content found.")}</div>
+          </article>
+          <article class="health-card">
+            <div class="health-top"><strong>NOTES.md</strong><span class="pill \${notes.exists ? "ok" : "warn"}">\${notes.exists ? "PRESENT" : "MISSING"}</span></div>
+            <div class="muted">Updated: \${asText(notesUpdated)}</div>
+            <div class="muted">State entries (notes:entry:*): \${asText(String(counts.notesEntries || 0))}</div>
+            <div class="preview">\${asText(notesPreview || "No content found.")}</div>
+          </article>
+        </div>
+      \`;
+    }
+
+    function renderSkillState(skillState) {
+      const el = document.getElementById("skillstate");
+      if (!skillState) {
+        el.innerHTML = "<p class='muted'>Skill state unavailable.</p>";
+        return;
+      }
+      el.innerHTML = \`
+        <div class="health-grid">
+          <article class="health-card">
+            <div class="health-top"><strong>fetch-url cache</strong><span class="pill">\${asText(String(skillState.fetchUrlCacheEntries || 0))}</span></div>
+            <div class="muted">Pattern: fetch-url:cache:*</div>
+          </article>
+          <article class="health-card">
+            <div class="health-top"><strong>TTS cache</strong><span class="pill">\${asText(String(skillState.ttsAudioCacheEntries || 0))}</span></div>
+            <div class="muted">Pattern: tts:audio:*</div>
+          </article>
+          <article class="health-card">
+            <div class="health-top"><strong>ATM tram cache</strong><span class="pill">\${asText(String(skillState.atmTramScheduleCacheEntries || 0))}</span></div>
+            <div class="muted">Pattern: atm-tram-schedule:cache:*</div>
+          </article>
+          <article class="health-card">
+            <div class="health-top"><strong>ATM GTFS timestamp</strong><span class="pill \${skillState.atmTramScheduleGtfsTimestampPresent ? "ok" : "warn"}">\${skillState.atmTramScheduleGtfsTimestampPresent ? "PRESENT" : "MISSING"}</span></div>
+            <div class="muted">Key: atm-tram-schedule:gtfs:timestamp</div>
+          </article>
+        </div>
+      \`;
+    }
+
     async function refresh() {
       const response = await fetch("/dashboard/api/snapshot", { cache: "no-store" });
       const data = await response.json();
@@ -190,6 +266,8 @@ export function renderDashboardHtml(): string {
       renderHealth(data.health || null);
       renderDynamicColumns("todos", data.todo?.columns || []);
       renderDynamicColumns("groceries", data.groceries?.columns || []);
+      renderKnowledge(data.knowledge || null);
+      renderSkillState(data.skillState || null);
     }
 
     refresh().catch((error) => {

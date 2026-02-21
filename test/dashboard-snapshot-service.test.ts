@@ -73,6 +73,12 @@ describe("createDashboardSnapshotService", () => {
     store.pauseRecurringJob("rc-paused");
     store.setRuntimeValue("heartbeat_last_run_at", new Date(now - 95 * 60_000).toISOString());
     store.setRuntimeValue("heartbeat_last_result", "completed");
+    store.setRuntimeValue("memory:fact:abc123", "{\"id\":\"abc123\",\"type\":\"fact\",\"content\":\"likes espresso\"}");
+    store.setRuntimeValue("notes:entry:n1", "{\"id\":\"n1\",\"type\":\"project\",\"title\":\"Dash\",\"body\":\"todo\"}");
+    store.setRuntimeValue("fetch-url:cache:aaa", "{\"timestamp\":\"2026-02-21T09:00:00Z\"}");
+    store.setRuntimeValue("tts:audio:bbb", "{\"timestamp\":\"2026-02-21T09:00:00Z\"}");
+    store.setRuntimeValue("atm-tram-schedule:cache:ccc", "{\"timestamp\":\"2026-02-21T09:00:00Z\"}");
+    store.setRuntimeValue("atm-tram-schedule:gtfs:timestamp", "2026-02-21T09:00:00Z");
     store.createDelayedJob({
       jobId: "dl-running",
       updateId: 1,
@@ -103,6 +109,8 @@ describe("createDashboardSnapshotService", () => {
       path.join(dataRoot, "groceries.md"),
       ["# Groceries", "## To Buy", "- Apples", "## Fuori rotazione", "- Chips", "## In Pantry", "- Rice"].join("\n"),
     );
+    await writeFile(path.join(dataRoot, "MEMORY.md"), "# Memory\n\n- likes espresso\n");
+    await writeFile(path.join(dataRoot, "NOTES.md"), "# Structured Notes\n\n## Project Notes\n\n### Dash\n");
 
     const service = createDashboardSnapshotService({ stateStore: store, dataRoot });
     const snapshot = await service.getSnapshot();
@@ -128,6 +136,16 @@ describe("createDashboardSnapshotService", () => {
     expect(snapshot.groceries.columns[0]?.items.map((item) => item.text)).toEqual(["Apples"]);
     expect(snapshot.groceries.columns[1]?.items.map((item) => item.text)).toEqual(["Chips"]);
     expect(snapshot.groceries.columns[2]?.items.map((item) => item.text)).toEqual(["Rice"]);
+    expect(snapshot.knowledge.memory.exists).toBe(true);
+    expect(snapshot.knowledge.notes.exists).toBe(true);
+    expect(snapshot.knowledge.memory.previewLines[0]).toBe("# Memory");
+    expect(snapshot.knowledge.notes.previewLines[0]).toBe("# Structured Notes");
+    expect(snapshot.knowledge.stateCounts.memoryEntries).toBe(1);
+    expect(snapshot.knowledge.stateCounts.notesEntries).toBe(1);
+    expect(snapshot.skillState.fetchUrlCacheEntries).toBe(1);
+    expect(snapshot.skillState.ttsAudioCacheEntries).toBe(1);
+    expect(snapshot.skillState.atmTramScheduleCacheEntries).toBe(1);
+    expect(snapshot.skillState.atmTramScheduleGtfsTimestampPresent).toBe(true);
 
     store.close();
   });

@@ -54,4 +54,26 @@ export type DashboardSnapshot = {
   groceries: {
     columns: BoardColumn[];
   };
+  knowledge: {
+    memory: {
+      exists: boolean;
+      updatedAt: string | null;
+      previewLines: string[];
+    };
+    notes: {
+      exists: boolean;
+      updatedAt: string | null;
+      previewLines: string[];
+    };
+    stateCounts: {
+      memoryEntries: number;
+      notesEntries: number;
+    };
+  };
+  skillState: {
+    fetchUrlCacheEntries: number;
+    ttsAudioCacheEntries: number;
+    atmTramScheduleCacheEntries: number;
+    atmTramScheduleGtfsTimestampPresent: boolean;
+  };
 };
