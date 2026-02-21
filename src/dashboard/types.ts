@@ -24,6 +24,30 @@ export type DashboardSnapshot = {
   generatedAt: string;
   timezone: string;
   jobs: DashboardJob[];
+  health: {
+    heartbeat: {
+      status: "ok" | "warn" | "critical";
+      lastRunAt: string | null;
+      lastResult: string | null;
+      minutesSinceLastRun: number | null;
+      staleAfterMinutes: number;
+    };
+    errors: {
+      failedPendingDelivery: number;
+      heartbeatError: boolean;
+      total: number;
+    };
+    pending: {
+      scheduled: number;
+      running: number;
+      pendingDelivery: number;
+      total: number;
+    };
+    uptime: {
+      seconds: number;
+      human: string;
+    };
+  };
   todo: {
     columns: BoardColumn[];
   };

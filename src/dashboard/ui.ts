@@ -50,6 +50,20 @@ export function renderDashboardHtml(): string {
       padding: 10px;
       margin-bottom: 8px;
     }
+    .health-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    .health-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+    .health-top { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 4px; }
+    .pill {
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.75rem;
+      border: 1px solid var(--line);
+      background: #f3f4f6;
+      color: #111827;
+    }
+    .pill.ok { background: #ecfdf5; color: #065f46; border-color: #6ee7b7; }
+    .pill.warn { background: #fff7ed; color: #9a3412; border-color: #fdba74; }
+    .pill.critical { background: #fef2f2; color: #991b1b; border-color: #fca5a5; }
     .muted { color: var(--muted); font-size: 0.84rem; }
     .board { display: grid; grid-template-columns: 1fr; gap: 10px; }
     .col { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
@@ -68,15 +82,17 @@ export function renderDashboardHtml(): string {
     <div class="note">Read-only dashboard. To edit jobs, todos, and groceries use Telegram agent commands.</div>
     <div class="tabs">
       <button class="tab active" data-view="calendar">Calendar</button>
+      <button class="tab" data-view="health">Health</button>
       <button class="tab" data-view="todos">Todos</button>
       <button class="tab" data-view="groceries">Groceries</button>
     </div>
     <section id="calendar" class="view active"></section>
+    <section id="health" class="view"></section>
     <section id="todos" class="view"></section>
     <section id="groceries" class="view"></section>
   </main>
   <script>
-    const views = ["calendar", "todos", "groceries"];
+    const views = ["calendar", "health", "todos", "groceries"];
     for (const tab of document.querySelectorAll(".tab")) {
       tab.addEventListener("click", () => {
         for (const id of views) document.getElementById(id).classList.remove("active");
@@ -123,11 +139,55 @@ export function renderDashboardHtml(): string {
       \`).join("");
     }
 
+    function renderHealth(health) {
+      const el = document.getElementById("health");
+      if (!health) {
+        el.innerHTML = "<p class='muted'>Health data unavailable.</p>";
+        return;
+      }
+      const heartbeat = health.heartbeat || {};
+      const errors = health.errors || {};
+      const pending = health.pending || {};
+      const uptime = health.uptime || {};
+      const hbStatus = asText(heartbeat.status || "warn");
+      const hbLastRun = heartbeat.lastRunAt ? new Date(heartbeat.lastRunAt).toLocaleString() : "n/a";
+      const hbMinutes = heartbeat.minutesSinceLastRun ?? "n/a";
+      el.innerHTML = \`
+        <div class="health-grid">
+          <article class="health-card">
+            <div class="health-top">
+              <strong>Heartbeat</strong>
+              <span class="pill \${hbStatus}">\${hbStatus.toUpperCase()}</span>
+            </div>
+            <div class="muted">Last run: \${asText(hbLastRun)} | Last result: \${asText(heartbeat.lastResult || "n/a")}</div>
+            <div class="muted">Minutes since last run: \${asText(String(hbMinutes))}</div>
+          </article>
+          <article class="health-card">
+            <div class="health-top"><strong>Errors</strong><span class="pill \${errors.total > 0 ? "critical" : "ok"}">\${errors.total > 0 ? "ACTIVE" : "CLEAR"}</span></div>
+            <div class="muted">Failed pending delivery: \${asText(String(errors.failedPendingDelivery || 0))}</div>
+            <div class="muted">Heartbeat error flag: \${asText(errors.heartbeatError ? "yes" : "no")}</div>
+          </article>
+          <article class="health-card">
+            <div class="health-top"><strong>Pending</strong><span class="pill \${pending.total > 0 ? "warn" : "ok"}">\${pending.total > 0 ? "ATTENTION" : "OK"}</span></div>
+            <div class="muted">Scheduled: \${asText(String(pending.scheduled || 0))}</div>
+            <div class="muted">Running: \${asText(String(pending.running || 0))}</div>
+            <div class="muted">Pending delivery: \${asText(String(pending.pendingDelivery || 0))}</div>
+          </article>
+          <article class="health-card">
+            <div class="health-top"><strong>Uptime</strong><span class="pill ok">LIVE</span></div>
+            <div class="muted">Human: \${asText(String(uptime.human || "n/a"))}</div>
+            <div class="muted">Seconds: \${asText(String(uptime.seconds || 0))}</div>
+          </article>
+        </div>
+      \`;
+    }
+
     async function refresh() {
       const response = await fetch("/dashboard/api/snapshot", { cache: "no-store" });
       const data = await response.json();
       document.getElementById("meta").textContent = "Updated " + new Date(data.generatedAt).toLocaleString() + " (" + data.timezone + ")";
       renderCalendar(data.jobs || []);
+      renderHealth(data.health || null);
       renderDynamicColumns("todos", data.todo?.columns || []);
       renderDynamicColumns("groceries", data.groceries?.columns || []);
     }

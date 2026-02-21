@@ -9,6 +9,30 @@ describe("startDashboardHttpServer", () => {
       generatedAt: "2026-02-21T09:00:00.000Z",
       timezone: "Europe/Rome",
       jobs: [],
+      health: {
+        heartbeat: {
+          status: "ok",
+          lastRunAt: "2026-02-21T08:30:00.000Z",
+          lastResult: "completed",
+          minutesSinceLastRun: 30,
+          staleAfterMinutes: 90,
+        },
+        errors: {
+          failedPendingDelivery: 0,
+          heartbeatError: false,
+          total: 0,
+        },
+        pending: {
+          scheduled: 0,
+          running: 0,
+          pendingDelivery: 0,
+          total: 0,
+        },
+        uptime: {
+          seconds: 120,
+          human: "2m 0s",
+        },
+      },
       todo: { columns: [] },
       groceries: { columns: [] },
     };

@@ -71,6 +71,29 @@ describe("createDashboardSnapshotService", () => {
       recurrenceExpression: "2h",
     });
     store.pauseRecurringJob("rc-paused");
+    store.setRuntimeValue("heartbeat_last_run_at", new Date(now - 95 * 60_000).toISOString());
+    store.setRuntimeValue("heartbeat_last_result", "completed");
+    store.createDelayedJob({
+      jobId: "dl-running",
+      updateId: 1,
+      userId: 1,
+      chatId: 1,
+      prompt: "running delayed",
+      requestPreview: "running delayed",
+      runAt: future,
+    });
+    store.claimScheduledJob("dl-running");
+    store.createDelayedJob({
+      jobId: "dl-failed-pending",
+      updateId: 1,
+      userId: 1,
+      chatId: 1,
+      prompt: "failed delayed",
+      requestPreview: "failed delayed",
+      runAt: future,
+    });
+    store.claimScheduledJob("dl-failed-pending");
+    store.markBackgroundJobFailed("dl-failed-pending", "send failed", "delivery failed");
 
     await writeFile(
       path.join(dataRoot, "TODO.md"),
@@ -85,6 +108,15 @@ describe("createDashboardSnapshotService", () => {
     const snapshot = await service.getSnapshot();
 
     expect(snapshot.jobs.map((job) => job.id).sort()).toEqual(["dl-future", "rc-future"]);
+    expect(snapshot.health.heartbeat.status).toBe("warn");
+    expect(snapshot.health.errors.failedPendingDelivery).toBe(1);
+    expect(snapshot.health.errors.total).toBe(1);
+    expect(snapshot.health.pending.scheduled).toBe(3);
+    expect(snapshot.health.pending.running).toBe(1);
+    expect(snapshot.health.pending.pendingDelivery).toBe(1);
+    expect(snapshot.health.pending.total).toBe(5);
+    expect(snapshot.health.uptime.seconds).toBeGreaterThanOrEqual(0);
+    expect(snapshot.health.uptime.human.length).toBeGreaterThan(0);
     expect(snapshot.todo.columns.map((column) => column.title)).toEqual(["Backlog", "Fatto"]);
     expect(snapshot.todo.columns[0]?.items.map((item) => item.text)).toEqual(["Open item"]);
     expect(snapshot.todo.columns[1]?.items.map((item) => item.text)).toEqual(["Done item"]);
