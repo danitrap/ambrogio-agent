@@ -33,8 +33,11 @@ services:
       - NO_COLOR=1
       - LOG_LEVEL=info
       - TELEGRAM_POLL_TIMEOUT_SECONDS=20
+      - DASHBOARD_HOST=0.0.0.0
     volumes:
       - ./data:/data:rw
+    ports:
+      - "${TAILNET_IP:?Set TAILNET_IP in .env}:${DASHBOARD_PORT:-8787}:${DASHBOARD_PORT:-8787}"
     deploy:
       resources:
         limits:

@@ -30,7 +30,24 @@ export type AppConfig = {
   logLevel: LogLevel;
   telegramPollTimeoutSeconds: number;
   heartbeatQuietHours: string | null;
+  dashboardEnabled: boolean;
+  dashboardHost: string;
+  dashboardPort: number;
 };
+
+function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
+  if (value === undefined) {
+    return defaultValue;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`Invalid boolean value: ${value}`);
+}
 
 export function loadConfig(): AppConfig {
   const logLevel = (Bun.env.LOG_LEVEL ?? "info") as LogLevel;
@@ -61,5 +78,8 @@ export function loadConfig(): AppConfig {
     logLevel,
     telegramPollTimeoutSeconds: parseNumber(Bun.env.TELEGRAM_POLL_TIMEOUT_SECONDS ?? "20", "TELEGRAM_POLL_TIMEOUT_SECONDS"),
     heartbeatQuietHours: Bun.env.HEARTBEAT_QUIET_HOURS?.trim() || null,
+    dashboardEnabled: parseBoolean(Bun.env.DASHBOARD_ENABLED, true),
+    dashboardHost: Bun.env.DASHBOARD_HOST ?? "127.0.0.1",
+    dashboardPort: parseNumber(Bun.env.DASHBOARD_PORT ?? "8787", "DASHBOARD_PORT"),
   };
 }

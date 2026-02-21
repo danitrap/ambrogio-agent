@@ -25,6 +25,8 @@ import { SkillDiscovery } from "./skills/discovery";
 import { bootstrapAgentsFile } from "./agents/bootstrap";
 import { TelegramAdapter } from "./telegram/adapter";
 import { parseTelegramCommand } from "./telegram/commands";
+import { createDashboardSnapshotService } from "./dashboard/snapshot-service";
+import { startDashboardHttpServer } from "./dashboard/http-server";
 
 const TYPING_INTERVAL_MS = 4_000;
 const MODEL_TIMEOUT_MS = 60_000;
@@ -307,6 +309,21 @@ async function main(): Promise<void> {
   const tts = config.elevenLabsApiKey ? new ElevenLabsTts(config.elevenLabsApiKey) : null;
   const stateStore = await StateStore.open(config.dataRoot);
   logger.info("state_store_opened", { dbPath: path.join(config.dataRoot, "runtime", "state.db") });
+  const dashboardSnapshotService = createDashboardSnapshotService({
+    stateStore,
+    dataRoot: config.dataRoot,
+  });
+
+  if (config.dashboardEnabled) {
+    startDashboardHttpServer({
+      host: config.dashboardHost,
+      port: config.dashboardPort,
+      logger,
+      getSnapshot: dashboardSnapshotService.getSnapshot,
+    });
+  } else {
+    logger.info("dashboard_http_disabled");
+  }
 
   const ambrogioAgent = new AmbrogioAgentService({
     allowlist,
