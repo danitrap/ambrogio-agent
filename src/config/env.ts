@@ -29,6 +29,8 @@ export type AppConfig = {
   claudeArgs: string[];
   logLevel: LogLevel;
   telegramPollTimeoutSeconds: number;
+  telegramInputIdleMs: number;
+  telegramInputBufferEnabled: boolean;
   heartbeatQuietHours: string | null;
   dashboardEnabled: boolean;
   dashboardHost: string;
@@ -47,6 +49,14 @@ function parseBoolean(value: string | undefined, defaultValue: boolean): boolean
     return false;
   }
   throw new Error(`Invalid boolean value: ${value}`);
+}
+
+function parsePositiveInteger(value: string, name: string): number {
+  const parsed = parseNumber(value, name);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid positive integer for ${name}: ${value}`);
+  }
+  return parsed;
 }
 
 export function loadConfig(): AppConfig {
@@ -77,6 +87,8 @@ export function loadConfig(): AppConfig {
     claudeArgs,
     logLevel,
     telegramPollTimeoutSeconds: parseNumber(Bun.env.TELEGRAM_POLL_TIMEOUT_SECONDS ?? "20", "TELEGRAM_POLL_TIMEOUT_SECONDS"),
+    telegramInputIdleMs: parsePositiveInteger(Bun.env.TELEGRAM_INPUT_IDLE_MS ?? "3000", "TELEGRAM_INPUT_IDLE_MS"),
+    telegramInputBufferEnabled: parseBoolean(Bun.env.TELEGRAM_INPUT_BUFFER_ENABLED, true),
     heartbeatQuietHours: Bun.env.HEARTBEAT_QUIET_HOURS?.trim() || null,
     dashboardEnabled: parseBoolean(Bun.env.DASHBOARD_ENABLED, true),
     dashboardHost: Bun.env.DASHBOARD_HOST ?? "127.0.0.1",

@@ -51,6 +51,7 @@ export async function handleTelegramCommand(params: {
           "/clear - cancella memoria conversazione",
           "/heartbeat - forza un heartbeat immediato",
           "/sendaudio <path> - invia un file audio da /data",
+          "Nota: i messaggi consecutivi vengono accorpati e inviati al modello dopo breve inattivita.",
         ].join("\n"),
       );
       return true;

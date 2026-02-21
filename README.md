@@ -5,6 +5,7 @@ Personal-only ambrogio-agent wrapper for Telegram with a secure `/data` boundary
 ## Features (v1)
 
 - Telegram long polling input
+- Automatic coalescing of consecutive Telegram messages before model execution (idle window)
 - Telegram vocal message support with transcription (`gpt-4o-mini-transcribe`)
 - Optional audio replies via ElevenLabs TTS with `/audio <prompt>` when `ELEVENLABS_API_KEY` is set
 - Single-user allowlist (`TELEGRAM_ALLOWED_USER_ID`)
@@ -44,6 +45,8 @@ cp .env.example .env
 - `CLAUDE_COMMAND` (default: `claude`, only used when `BACKEND=claude`)
 - `CLAUDE_ARGS` (optional additional args for Claude Code)
 - `HEARTBEAT_QUIET_HOURS` (default suggested: `22:00-06:00`, local timezone; suppresses only timer check-ins)
+- `TELEGRAM_INPUT_IDLE_MS` (default: `3000`, execute after this idle window)
+- `TELEGRAM_INPUT_BUFFER_ENABLED` (default: `true`, disable to process each non-command update immediately)
 
 4. Start:
 ```bash

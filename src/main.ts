@@ -18,12 +18,13 @@ import { sendTelegramFormattedMessage, sendTelegramTextReply } from "./runtime/m
 import { dispatchAssistantReply, resolveAudioPathForUpload } from "./runtime/reply-dispatcher";
 import { StateStore } from "./runtime/state-store";
 import { startJobRpcServer } from "./runtime/job-rpc-server";
+import { createTelegramInputBuffer, type BufferedTelegramInput } from "./runtime/telegram-input-buffer";
 import { startTelegramUpdateLoop } from "./runtime/telegram-update-loop";
 import { parseOpenTodoItems } from "./runtime/todo-snapshot";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
 import { bootstrapAgentsFile } from "./agents/bootstrap";
-import { TelegramAdapter } from "./telegram/adapter";
+import { TelegramAdapter, type TelegramMessage } from "./telegram/adapter";
 import { parseTelegramCommand } from "./telegram/commands";
 import { createDashboardSnapshotService } from "./dashboard/snapshot-service";
 import { startDashboardHttpServer } from "./dashboard/http-server";
@@ -758,6 +759,286 @@ async function main(): Promise<void> {
     filePath: `${config.dataRoot}/${HEARTBEAT_FILE_NAME}`,
   });
 
+  const summarizeUpdate = (update: TelegramMessage): string => {
+    if (update.text) {
+      return `text: ${previewText(update.text, 120)}`;
+    }
+    if (update.voiceFileId) {
+      return "voice message";
+    }
+    if (update.attachments.length > 0) {
+      const kinds = [...new Set(update.attachments.map((attachment) => attachment.kind))];
+      return `attachments: ${kinds.join(",")} (${update.attachments.length})`;
+    }
+    return "non-text message";
+  };
+
+  const runOperationWithSoftTimeout = async (params: {
+    update: Pick<TelegramMessage, "updateId" | "userId" | "chatId">;
+    commandName?: string;
+    requestPreview: string;
+    operation: (signal: AbortSignal) => Promise<string>;
+  }): Promise<{ reply: string; ok: boolean }> => {
+    const tracked = startOperationWithTyping({
+      telegram,
+      logger,
+      chatId: params.update.chatId,
+      updateId: params.update.updateId,
+      userId: params.update.userId,
+      operation: params.operation,
+    });
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const settledPromise = tracked.operationPromise
+      .then((reply) => ({ kind: "ok" as const, reply }))
+      .catch((error) => ({ kind: "error" as const, error }));
+    const first = await Promise.race([
+      settledPromise,
+      new Promise<{ kind: "timeout" }>((resolve) => {
+        timeout = setTimeout(() => resolve({ kind: "timeout" }), MODEL_TIMEOUT_MS);
+      }),
+    ]);
+
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+
+    if (first.kind === "ok") {
+      return { reply: first.reply, ok: true };
+    }
+
+    if (first.kind === "error") {
+      const message = first.error instanceof Error ? first.error.message : "Unknown error";
+      logger.error("message_processing_failed", {
+        message,
+        ...correlationFields({
+          updateId: params.update.updateId,
+          userId: params.update.userId,
+          chatId: params.update.chatId,
+          command: params.commandName,
+        }),
+      });
+      return { reply: `Error: ${message}`, ok: false };
+    }
+
+    await tracked.stopTyping();
+    const jobId = `bg-${params.update.updateId}-${Date.now()}`;
+    logger.error("request_timed_out", {
+      ...correlationFields({
+        updateId: params.update.updateId,
+        userId: params.update.userId,
+        chatId: params.update.chatId,
+        command: params.commandName,
+      }),
+      timeoutMs: MODEL_TIMEOUT_MS,
+      jobId,
+    });
+    stateStore.createBackgroundJob({
+      jobId,
+      updateId: params.update.updateId,
+      userId: params.update.userId,
+      chatId: params.update.chatId,
+      command: params.commandName,
+      requestPreview: previewText(params.requestPreview, 240),
+    });
+
+    void tracked.operationPromise
+      .then(async (reply) => {
+        const marked = stateStore.markBackgroundJobCompleted(jobId, reply);
+        if (!marked) {
+          logger.info("background_job_result_dropped", { jobId, reason: "status_changed" });
+          return;
+        }
+        const job = stateStore.getBackgroundJob(jobId);
+        if (!job) {
+          logger.warn("background_job_missing_after_complete", { jobId });
+          return;
+        }
+        await deliverBackgroundJob(job, "completion");
+      })
+      .catch(async (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const failureReply = `Job in background fallito (ID: ${jobId}): ${message}`;
+        const marked = stateStore.markBackgroundJobFailed(jobId, message, failureReply);
+        if (!marked) {
+          logger.info("background_job_failure_dropped", { jobId, reason: "status_changed" });
+          return;
+        }
+        const job = stateStore.getBackgroundJob(jobId);
+        if (!job) {
+          logger.warn("background_job_missing_after_failure", { jobId, message });
+          return;
+        }
+        await deliverBackgroundJob(job, "completion");
+      });
+
+    return {
+      reply:
+        `Operazione lunga: continuo in background e ti aggiorno appena finisce.\n` +
+        `Job ID: ${jobId}`,
+      ok: false,
+    };
+  };
+
+  const executeBufferedInput = async (input: BufferedTelegramInput): Promise<void> => {
+    const updateContext: TelegramMessage = {
+      updateId: input.lastUpdateId,
+      userId: input.userId,
+      chatId: input.chatId,
+      text: null,
+      voiceFileId: null,
+      voiceMimeType: null,
+      attachments: [],
+    };
+    let promptText = input.textSegments.join("\n\n").trim() || null;
+
+    if (!promptText && (input.voiceItems.length > 0 || input.attachments.length > 0) && !allowlist.isAllowed(input.userId)) {
+      await sendTelegramTextReply({
+        telegram,
+        logger,
+        update: updateContext,
+        text: "Unauthorized user.",
+        onSentText: async (text) => {
+          await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+        },
+      });
+      return;
+    }
+
+    const result = await runOperationWithSoftTimeout({
+      update: updateContext,
+      requestPreview: promptText ?? (input.voiceItems.length > 0 ? "voice message" : "attachment workflow"),
+      operation: async (signal) => {
+        const processedAttachments: ProcessedAttachment[] = [];
+        for (let index = 0; index < input.attachments.length; index += 1) {
+          const attachment = input.attachments[index];
+          if (!attachment) {
+            continue;
+          }
+          try {
+            const download = await telegram.downloadFileById(attachment.fileId);
+            const processed = await attachmentService.processIncoming({
+              attachment,
+              download,
+              updateId: input.lastUpdateId,
+              sequence: index,
+            });
+            processedAttachments.push(processed);
+            logger.info("telegram_attachment_saved", {
+              updateId: input.lastUpdateId,
+              userId: input.userId,
+              chatId: input.chatId,
+              kind: processed.kind,
+              relativePath: processed.relativePath,
+              sizeBytes: processed.sizeBytes,
+              inlineText: processed.inlineText !== null,
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            logger.warn("telegram_attachment_processing_failed", {
+              updateId: input.lastUpdateId,
+              userId: input.userId,
+              chatId: input.chatId,
+              attachmentKind: attachment.kind,
+              message,
+            });
+          }
+        }
+
+        const transcriptions: string[] = [];
+        for (const voiceItem of input.voiceItems) {
+          try {
+            const audio = await telegram.downloadFileById(voiceItem.fileId);
+            const transcription = await transcriber.transcribe(audio.fileBlob, audio.fileName, audio.mimeType ?? voiceItem.mimeType);
+            transcriptions.push(transcription);
+            logger.info("telegram_voice_transcribed", {
+              updateId: voiceItem.updateId,
+              userId: input.userId,
+              chatId: input.chatId,
+              transcriptionLength: transcription.length,
+              transcriptionPreview: previewText(transcription),
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            logger.warn("telegram_voice_transcription_failed", {
+              updateId: voiceItem.updateId,
+              userId: input.userId,
+              chatId: input.chatId,
+              message,
+            });
+          }
+        }
+
+        if (transcriptions.length > 0) {
+          const voiceText = transcriptions.join("\n\n");
+          promptText = promptText ? [promptText, voiceText].join("\n\n") : voiceText;
+        }
+
+        const attachmentContext = attachmentService.buildPromptContext(processedAttachments);
+        if (attachmentContext) {
+          const basePrompt = promptText ?? "Analizza gli allegati salvati e proponi i prossimi passi.";
+          promptText = [attachmentContext, "", "User message:", basePrompt].join("\n");
+        }
+
+        if (!promptText) {
+          return input.attachments.length > 0
+            ? "Non riesco a processare l'allegato inviato."
+            : "Posso gestire solo messaggi testuali o vocali.";
+        }
+
+        const modelReply = await ambrogioAgent.handleMessage(input.userId, promptText, String(input.lastUpdateId), signal);
+        lastPromptByUser.set(input.userId, promptText);
+        return modelReply;
+      },
+    });
+
+    if (result.ok) {
+      handledMessages += 1;
+    } else {
+      failedMessages += 1;
+    }
+
+    await dispatchAssistantReply({
+      telegram,
+      logger,
+      tts,
+      rootRealPath: dataRootRealPath,
+      update: updateContext,
+      rawReply: result.reply,
+      onTextSent: async (text) => {
+        await recordRecentTelegramEntry("assistant", text);
+      },
+    });
+  };
+
+  const inputBuffer = createTelegramInputBuffer({
+    idleMs: config.telegramInputIdleMs,
+    enabled: config.telegramInputBufferEnabled,
+    onFlush: async (input) => {
+      logger.info("telegram_input_buffer_flushed", {
+        chatId: input.chatId,
+        userId: input.userId,
+        firstUpdateId: input.firstUpdateId,
+        lastUpdateId: input.lastUpdateId,
+        updateCount: input.updates.length,
+        textCount: input.textSegments.length,
+        voiceCount: input.voiceItems.length,
+        attachmentCount: input.attachments.length,
+      });
+      await executeBufferedInput(input);
+    },
+    onFlushError: async (error, input) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error("telegram_input_buffer_flush_failed", {
+        message,
+        chatId: input.chatId,
+        userId: input.userId,
+        firstUpdateId: input.firstUpdateId,
+        lastUpdateId: input.lastUpdateId,
+      });
+    },
+  });
+
   await startTelegramUpdateLoop({
     telegram,
     pollTimeoutSeconds: config.telegramPollTimeoutSeconds,
@@ -766,422 +1047,206 @@ async function main(): Promise<void> {
       offset = nextOffset;
     },
     processUpdate: async (update) => {
-        lastTelegramMessageAtMs = Date.now();
-        if (update.text) {
-          lastTelegramMessageSummary = `text: ${previewText(update.text, 120)}`;
-        } else if (update.voiceFileId) {
-          lastTelegramMessageSummary = "voice message";
-        } else if (update.attachments.length > 0) {
-          const kinds = [...new Set(update.attachments.map((attachment) => attachment.kind))];
-          lastTelegramMessageSummary = `attachments: ${kinds.join(",")} (${update.attachments.length})`;
-        } else {
-          lastTelegramMessageSummary = "non-text message";
-        }
-        await recordRecentTelegramEntry("user", lastTelegramMessageSummary, lastTelegramMessageAtMs);
-        logger.info("telegram_message_received", {
-          updateId: update.updateId,
-          userId: update.userId,
-          chatId: update.chatId,
-          textLength: update.text?.length ?? 0,
-          textPreview: update.text ? previewText(update.text) : undefined,
-          hasVoice: update.voiceFileId !== null,
-          attachmentCount: update.attachments.length,
-        });
+      lastTelegramMessageAtMs = Date.now();
+      lastTelegramMessageSummary = summarizeUpdate(update);
+      await recordRecentTelegramEntry("user", lastTelegramMessageSummary, lastTelegramMessageAtMs);
+      logger.info("telegram_message_received", {
+        updateId: update.updateId,
+        userId: update.userId,
+        chatId: update.chatId,
+        textLength: update.text?.length ?? 0,
+        textPreview: update.text ? previewText(update.text) : undefined,
+        hasVoice: update.voiceFileId !== null,
+        attachmentCount: update.attachments.length,
+      });
 
-        const command = update.text ? parseTelegramCommand(update.text) : null;
-        const sendCommandReply = async (outbound: string): Promise<void> => {
-          await sendTelegramTextReply({
-            telegram,
-            logger,
-            update,
-            text: outbound,
-            command: command?.name,
-            onSentText: async (text) => {
-              await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
-            },
-          });
-        };
-        const runOperationWithSoftTimeout = async (params: {
-          commandName?: string;
-          requestPreview: string;
-          operation: (signal: AbortSignal) => Promise<string>;
-        }): Promise<{ reply: string; ok: boolean }> => {
-          const tracked = startOperationWithTyping({
-            telegram,
-            logger,
-            chatId: update.chatId,
-            updateId: update.updateId,
-            userId: update.userId,
-            operation: params.operation,
-          });
-
-          let timeout: ReturnType<typeof setTimeout> | undefined;
-          const settledPromise = tracked.operationPromise
-            .then((reply) => ({ kind: "ok" as const, reply }))
-            .catch((error) => ({ kind: "error" as const, error }));
-          const first = await Promise.race([
-            settledPromise,
-            new Promise<{ kind: "timeout" }>((resolve) => {
-              timeout = setTimeout(() => resolve({ kind: "timeout" }), MODEL_TIMEOUT_MS);
-            }),
-          ]);
-
-          if (timeout) {
-            clearTimeout(timeout);
-          }
-
-          if (first.kind === "ok") {
-            return { reply: first.reply, ok: true };
-          }
-
-          if (first.kind === "error") {
-            const message = first.error instanceof Error ? first.error.message : "Unknown error";
-            logger.error("message_processing_failed", {
-              message,
-              ...correlationFields({
-                updateId: update.updateId,
-                userId: update.userId,
-                chatId: update.chatId,
-                command: params.commandName,
-              }),
-            });
-            return { reply: `Error: ${message}`, ok: false };
-          }
-
-          await tracked.stopTyping();
-          const jobId = `bg-${update.updateId}-${Date.now()}`;
-          logger.error("request_timed_out", {
-            ...correlationFields({
-              updateId: update.updateId,
-              userId: update.userId,
-              chatId: update.chatId,
-              command: params.commandName,
-            }),
-            timeoutMs: MODEL_TIMEOUT_MS,
-            jobId,
-          });
-          stateStore.createBackgroundJob({
-            jobId,
-            updateId: update.updateId,
-            userId: update.userId,
-            chatId: update.chatId,
-            command: params.commandName,
-            requestPreview: previewText(params.requestPreview, 240),
-          });
-
-          void tracked.operationPromise
-            .then(async (reply) => {
-              const marked = stateStore.markBackgroundJobCompleted(jobId, reply);
-              if (!marked) {
-                logger.info("background_job_result_dropped", { jobId, reason: "status_changed" });
-                return;
-              }
-              const job = stateStore.getBackgroundJob(jobId);
-              if (!job) {
-                logger.warn("background_job_missing_after_complete", { jobId });
-                return;
-              }
-              await deliverBackgroundJob(job, "completion");
-            })
-            .catch(async (error) => {
-              const message = error instanceof Error ? error.message : String(error);
-              const failureReply = `Job in background fallito (ID: ${jobId}): ${message}`;
-              const marked = stateStore.markBackgroundJobFailed(jobId, message, failureReply);
-              if (!marked) {
-                logger.info("background_job_failure_dropped", { jobId, reason: "status_changed" });
-                return;
-              }
-              const job = stateStore.getBackgroundJob(jobId);
-              if (!job) {
-                logger.warn("background_job_missing_after_failure", { jobId, message });
-                return;
-              }
-              await deliverBackgroundJob(job, "completion");
-            });
-
-          return {
-            reply:
-              `Operazione lunga: continuo in background e ti aggiorno appena finisce.\n` +
-              `Job ID: ${jobId}`,
-            ok: false,
-          };
-        };
-
-        const executePrompt = async (prompt: string, commandName: string) => {
-          const result = await runOperationWithSoftTimeout({
-            commandName,
-            requestPreview: prompt,
-            operation: (signal) => ambrogioAgent.handleMessage(update.userId, prompt, String(update.updateId), signal),
-          });
-          if (result.ok) {
-            handledMessages += 1;
-          } else {
-            failedMessages += 1;
-          }
-          return result;
-        };
-        const commandHandled = await handleTelegramCommand({
-          command,
+      const command = update.text ? parseTelegramCommand(update.text) : null;
+      const sendCommandReply = async (outbound: string): Promise<void> => {
+        await sendTelegramTextReply({
+          telegram,
+          logger,
           update,
-          isAllowed: (userId) => allowlist.isAllowed(userId),
-          sendCommandReply,
-          getStatusReply: () => {
-            const heartbeatState = heartbeatRunner.getHeartbeatState();
-            const uptime = formatDuration(Date.now() - startedAtMs);
-            const idle = lastTelegramMessageAtMs === null ? "n/a" : formatDuration(Date.now() - lastTelegramMessageAtMs);
-            const lastTelegramAt = lastTelegramMessageAtMs === null ? "n/a" : new Date(lastTelegramMessageAtMs).toISOString();
-            const summary = modelBridge.getLastExecutionSummary?.();
-            const lines = [
-              "Ambrogio-agent status:",
-              `Uptime: ${uptime}`,
-              `Handled messages: ${handledMessages}`,
-              `Failed messages: ${failedMessages}`,
-              `Background jobs pending delivery: ${stateStore.countPendingBackgroundJobs()}`,
-              `Delayed jobs scheduled: ${stateStore.countScheduledJobs()}`,
-              `Backend command: ${config.codexCommand}`,
-              `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
-              `Heartbeat interval: ${Math.floor(HEARTBEAT_INTERVAL_MS / 60000)}m`,
-              `Heartbeat running: ${heartbeatState.heartbeatInFlight ? "yes" : "no"}`,
-              `Heartbeat last run: ${heartbeatState.heartbeatLastRunAt ?? "n/a"}`,
-              `Heartbeat last result: ${heartbeatState.heartbeatLastResult}`,
-              `Heartbeat quiet hours: ${heartbeatRunner.getQuietHoursRaw() ?? "disabled"}`,
-              `Heartbeat now in quiet hours: ${heartbeatRunner.isInQuietHours() ? "yes" : "no"}`,
-              `Last telegram message at: ${lastTelegramAt}`,
-              `Idle since last telegram message: ${idle}`,
-              `Last telegram message summary: ${lastTelegramMessageSummary}`,
-            ];
-            return lines.join("\n");
+          text: outbound,
+          command: command?.name,
+          onSentText: async (text) => {
+            await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
           },
-          getLastLogReply: () => buildLastLogMessage(modelBridge.getLastExecutionSummary?.()),
-          getMemoryReply: (userId) => {
-            const stats = ambrogioAgent.getConversationStats(userId);
-            const lines = [
-              "Conversation memory:",
-              `Entries: ${stats.entries}`,
-              `User turns: ${stats.userTurns}`,
-              `Assistant turns: ${stats.assistantTurns}`,
-              `Has context: ${stats.hasContext ? "yes" : "no"}`,
-            ];
-            return lines.join("\n");
-          },
-          getSkillsReply: async () => {
-            const skillsRoot =
-              config.backend === "codex" ? codexSkillsRoot : claudeSkillsRoot;
-            const skills = new SkillDiscovery(skillsRoot);
-            const discovered = await skills.discover();
-            if (discovered.length === 0) {
-              return `Nessuna skill disponibile in ${skillsRoot}.`;
-            }
-            const lines = [
-              "Skills disponibili:",
-              ...discovered.map((skill, index) => {
-                const description = skill.description.replaceAll(/\s+/g, " ").trim();
-                return `${index + 1}. ${skill.id} - ${description}`;
-              }),
-            ];
-            return lines.join("\n");
-          },
-          getLastPrompt: (userId) => lastPromptByUser.get(userId),
-          setLastPrompt: (userId, prompt) => {
-            lastPromptByUser.set(userId, prompt);
-          },
-          clearConversation: (userId) => {
-            ambrogioAgent.clearConversation(userId);
-            logger.info("conversation_cleared", {
-              updateId: update.updateId,
-              userId,
-              chatId: update.chatId,
-            });
-          },
-          clearRuntimeState: async () => {
-            recentTelegramMessages.splice(0, recentTelegramMessages.length);
-            lastTelegramMessageAtMs = null;
-            lastTelegramMessageSummary = "n/a";
-            heartbeatRunner.resetHeartbeatState();
-            try {
-              stateStore.clearRecentMessages();
-              logger.debug("state_store_recent_messages_cleared");
-              stateStore.clearRuntimeValues([
-                "heartbeat_last_run_at",
-                "heartbeat_last_result",
-                "heartbeat_last_alert_fingerprint",
-                "heartbeat_last_alert_at",
-              ]);
-              logger.debug("state_store_runtime_values_cleared", {
-                keys: [
-                  "heartbeat_last_run_at",
-                  "heartbeat_last_result",
-                  "heartbeat_last_alert_fingerprint",
-                  "heartbeat_last_alert_at",
-                ],
-              });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              logger.warn("telegram_history_clear_failed", { message });
-            }
-            logger.info("runtime_state_cleared", {
-              updateId: update.updateId,
-              userId: update.userId,
-              chatId: update.chatId,
-            });
-          },
-          executePrompt,
-          dispatchAssistantReply: async (reply, options) => {
-            await dispatchAssistantReply({
-              telegram,
-              logger,
-              tts,
-              rootRealPath: dataRootRealPath,
-              update,
-              rawReply: reply,
-              noTtsPrefix: options.noTtsPrefix,
-              forceAudio: options.forceAudio,
-              logContext: { command: options.command },
-              onTextSent: async (text) => {
-                await recordRecentTelegramEntry("assistant", text);
-              },
-            });
-          },
-          sendAudioFile: async (inputPath: string) => {
-            const { realPath, relativePath } = await resolveAudioPathForUpload(
-              dataRootRealPath,
-              inputPath,
-              MAX_TELEGRAM_AUDIO_BYTES,
-            );
-            const fileBlob = Bun.file(realPath);
-            await telegram.sendAudio(update.chatId, fileBlob, path.basename(relativePath), `File: ${relativePath}`);
-            logger.info("telegram_audio_sent", {
-              updateId: update.updateId,
-              userId: update.userId,
-              chatId: update.chatId,
-              filePath: relativePath,
-            });
-            return relativePath;
-          },
-          runHeartbeatNow: async () => {
-            await flushPendingBackgroundJobs();
-            const outcome = await heartbeatRunner.runScheduledHeartbeat("manual");
-            if (outcome.status === "skipped_inflight") {
-              return "Heartbeat gia in esecuzione.";
-            }
-            if (outcome.status === "completed") {
-              return "Heartbeat completato. La skill ha gestito autonomamente eventuali notifiche.";
-            }
-            if (outcome.status === "error") {
-              return "Heartbeat fallito con errore. Controlla i log per dettagli.";
-            }
-            // skipped_quiet_hours non dovrebbe accadere con trigger "manual"
-            return "Heartbeat skipped durante quiet hours.";
-          },
-
         });
-        if (commandHandled) {
-          return;
-        }
-
-        let reply: string;
-        let promptText = update.text;
-
-        if (!promptText && (update.voiceFileId || update.attachments.length > 0) && !allowlist.isAllowed(update.userId)) {
-          await sendTelegramTextReply({
-            telegram,
-            logger,
-            update,
-            text: "Unauthorized user.",
-            onSentText: async (text) => {
-              await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
-            },
-          });
-          return;
-        }
-
+      };
+      const executePrompt = async (prompt: string, commandName: string) => {
         const result = await runOperationWithSoftTimeout({
-          requestPreview: promptText ?? (update.voiceFileId ? "voice message" : "attachment workflow"),
-          operation: async (signal) => {
-            const processedAttachments: ProcessedAttachment[] = [];
-            for (let index = 0; index < update.attachments.length; index += 1) {
-              const attachment = update.attachments[index];
-              if (!attachment) {
-                continue;
-              }
-              try {
-                const download = await telegram.downloadFileById(attachment.fileId);
-                const processed = await attachmentService.processIncoming({
-                  attachment,
-                  download,
-                  updateId: update.updateId,
-                  sequence: index,
-                });
-                processedAttachments.push(processed);
-                logger.info("telegram_attachment_saved", {
-                  updateId: update.updateId,
-                  userId: update.userId,
-                  chatId: update.chatId,
-                  kind: processed.kind,
-                  relativePath: processed.relativePath,
-                  sizeBytes: processed.sizeBytes,
-                  inlineText: processed.inlineText !== null,
-                });
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
-                logger.warn("telegram_attachment_processing_failed", {
-                  updateId: update.updateId,
-                  userId: update.userId,
-                  chatId: update.chatId,
-                  attachmentKind: attachment.kind,
-                  message,
-                });
-              }
-            }
-
-            const attachmentContext = attachmentService.buildPromptContext(processedAttachments);
-
-            if (!promptText && update.voiceFileId) {
-              const audio = await telegram.downloadFileById(update.voiceFileId);
-              promptText = await transcriber.transcribe(audio.fileBlob, audio.fileName, audio.mimeType ?? update.voiceMimeType);
-              logger.info("telegram_voice_transcribed", {
-                updateId: update.updateId,
-                userId: update.userId,
-                chatId: update.chatId,
-                transcriptionLength: promptText.length,
-                transcriptionPreview: previewText(promptText),
-              });
-            }
-
-            if (attachmentContext) {
-              const basePrompt = promptText ?? "Analizza gli allegati salvati e proponi i prossimi passi.";
-              promptText = [attachmentContext, "", "User message:", basePrompt].join("\n");
-            }
-
-            if (!promptText) {
-              return update.attachments.length > 0
-                ? "Non riesco a processare l'allegato inviato."
-                : "Posso gestire solo messaggi testuali o vocali.";
-            }
-
-            const modelReply = await ambrogioAgent.handleMessage(update.userId, promptText, String(update.updateId), signal);
-            lastPromptByUser.set(update.userId, promptText);
-            return modelReply;
-          },
+          update,
+          commandName,
+          requestPreview: prompt,
+          operation: (signal) => ambrogioAgent.handleMessage(update.userId, prompt, String(update.updateId), signal),
         });
         if (result.ok) {
           handledMessages += 1;
         } else {
           failedMessages += 1;
         }
-        reply = result.reply;
+        return result;
+      };
+      const commandHandled = await handleTelegramCommand({
+        command,
+        update,
+        isAllowed: (userId) => allowlist.isAllowed(userId),
+        sendCommandReply,
+        getStatusReply: () => {
+          const heartbeatState = heartbeatRunner.getHeartbeatState();
+          const uptime = formatDuration(Date.now() - startedAtMs);
+          const idle = lastTelegramMessageAtMs === null ? "n/a" : formatDuration(Date.now() - lastTelegramMessageAtMs);
+          const lastTelegramAt = lastTelegramMessageAtMs === null ? "n/a" : new Date(lastTelegramMessageAtMs).toISOString();
+          const summary = modelBridge.getLastExecutionSummary?.();
+          const lines = [
+            "Ambrogio-agent status:",
+            `Uptime: ${uptime}`,
+            `Handled messages: ${handledMessages}`,
+            `Failed messages: ${failedMessages}`,
+            `Background jobs pending delivery: ${stateStore.countPendingBackgroundJobs()}`,
+            `Delayed jobs scheduled: ${stateStore.countScheduledJobs()}`,
+            `Backend command: ${config.codexCommand}`,
+            `Last codex exec: ${summary ? `${summary.status} (${summary.startedAt})` : "n/a"}`,
+            `Heartbeat interval: ${Math.floor(HEARTBEAT_INTERVAL_MS / 60000)}m`,
+            `Heartbeat running: ${heartbeatState.heartbeatInFlight ? "yes" : "no"}`,
+            `Heartbeat last run: ${heartbeatState.heartbeatLastRunAt ?? "n/a"}`,
+            `Heartbeat last result: ${heartbeatState.heartbeatLastResult}`,
+            `Heartbeat quiet hours: ${heartbeatRunner.getQuietHoursRaw() ?? "disabled"}`,
+            `Heartbeat now in quiet hours: ${heartbeatRunner.isInQuietHours() ? "yes" : "no"}`,
+            `Last telegram message at: ${lastTelegramAt}`,
+            `Idle since last telegram message: ${idle}`,
+            `Last telegram message summary: ${lastTelegramMessageSummary}`,
+          ];
+          return lines.join("\n");
+        },
+        getLastLogReply: () => buildLastLogMessage(modelBridge.getLastExecutionSummary?.()),
+        getMemoryReply: (userId) => {
+          const stats = ambrogioAgent.getConversationStats(userId);
+          const lines = [
+            "Conversation memory:",
+            `Entries: ${stats.entries}`,
+            `User turns: ${stats.userTurns}`,
+            `Assistant turns: ${stats.assistantTurns}`,
+            `Has context: ${stats.hasContext ? "yes" : "no"}`,
+          ];
+          return lines.join("\n");
+        },
+        getSkillsReply: async () => {
+          const skillsRoot =
+            config.backend === "codex" ? codexSkillsRoot : claudeSkillsRoot;
+          const skills = new SkillDiscovery(skillsRoot);
+          const discovered = await skills.discover();
+          if (discovered.length === 0) {
+            return `Nessuna skill disponibile in ${skillsRoot}.`;
+          }
+          const lines = [
+            "Skills disponibili:",
+            ...discovered.map((skill, index) => {
+              const description = skill.description.replaceAll(/\s+/g, " ").trim();
+              return `${index + 1}. ${skill.id} - ${description}`;
+            }),
+          ];
+          return lines.join("\n");
+        },
+        getLastPrompt: (userId) => lastPromptByUser.get(userId),
+        setLastPrompt: (userId, prompt) => {
+          lastPromptByUser.set(userId, prompt);
+        },
+        clearConversation: (userId) => {
+          ambrogioAgent.clearConversation(userId);
+          logger.info("conversation_cleared", {
+            updateId: update.updateId,
+            userId,
+            chatId: update.chatId,
+          });
+        },
+        clearRuntimeState: async () => {
+          recentTelegramMessages.splice(0, recentTelegramMessages.length);
+          lastTelegramMessageAtMs = null;
+          lastTelegramMessageSummary = "n/a";
+          inputBuffer.clear();
+          heartbeatRunner.resetHeartbeatState();
+          try {
+            stateStore.clearRecentMessages();
+            logger.debug("state_store_recent_messages_cleared");
+            stateStore.clearRuntimeValues([
+              "heartbeat_last_run_at",
+              "heartbeat_last_result",
+              "heartbeat_last_alert_fingerprint",
+              "heartbeat_last_alert_at",
+            ]);
+            logger.debug("state_store_runtime_values_cleared", {
+              keys: [
+                "heartbeat_last_run_at",
+                "heartbeat_last_result",
+                "heartbeat_last_alert_fingerprint",
+                "heartbeat_last_alert_at",
+              ],
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            logger.warn("telegram_history_clear_failed", { message });
+          }
+          logger.info("runtime_state_cleared", {
+            updateId: update.updateId,
+            userId: update.userId,
+            chatId: update.chatId,
+          });
+        },
+        executePrompt,
+        dispatchAssistantReply: async (reply, options) => {
+          await dispatchAssistantReply({
+            telegram,
+            logger,
+            tts,
+            rootRealPath: dataRootRealPath,
+            update,
+            rawReply: reply,
+            noTtsPrefix: options.noTtsPrefix,
+            forceAudio: options.forceAudio,
+            logContext: { command: options.command },
+            onTextSent: async (text) => {
+              await recordRecentTelegramEntry("assistant", text);
+            },
+          });
+        },
+        sendAudioFile: async (inputPath: string) => {
+          const { realPath, relativePath } = await resolveAudioPathForUpload(
+            dataRootRealPath,
+            inputPath,
+            MAX_TELEGRAM_AUDIO_BYTES,
+          );
+          const fileBlob = Bun.file(realPath);
+          await telegram.sendAudio(update.chatId, fileBlob, path.basename(relativePath), `File: ${relativePath}`);
+          logger.info("telegram_audio_sent", {
+            updateId: update.updateId,
+            userId: update.userId,
+            chatId: update.chatId,
+            filePath: relativePath,
+          });
+          return relativePath;
+        },
+        runHeartbeatNow: async () => {
+          await flushPendingBackgroundJobs();
+          const outcome = await heartbeatRunner.runScheduledHeartbeat("manual");
+          if (outcome.status === "skipped_inflight") {
+            return "Heartbeat gia in esecuzione.";
+          }
+          if (outcome.status === "completed") {
+            return "Heartbeat completato. La skill ha gestito autonomamente eventuali notifiche.";
+          }
+          if (outcome.status === "error") {
+            return "Heartbeat fallito con errore. Controlla i log per dettagli.";
+          }
+          return "Heartbeat skipped durante quiet hours.";
+        },
 
-        await dispatchAssistantReply({
-          telegram,
-          logger,
-          tts,
-          rootRealPath: dataRootRealPath,
-          update,
-          rawReply: reply,
-          onTextSent: async (text) => {
-            await recordRecentTelegramEntry("assistant", text);
-          },
-        });
+      });
+      if (commandHandled) {
+        return;
+      }
+
+      inputBuffer.enqueue(update);
     },
     onPollError: async (error) => {
       const message = error instanceof Error ? error.message : "Unknown error";
