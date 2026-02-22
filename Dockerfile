@@ -11,6 +11,9 @@ RUN apt-get update \
     ghostscript \
     imagemagick \
     git \
+    python3 \
+    python3-pip \
+    tesseract-ocr \
     yt-dlp \
     libatk1.0-0t64 \
     libatspi2.0-0t64 \
@@ -24,7 +27,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN mkdir -p /ms-playwright && chmod 755 /ms-playwright
-RUN npm install -g @openai/codex agent-browser \
+RUN pip3 install --break-system-packages uv \
+  && npm install -g @openai/codex agent-browser @steipete/summarize \
   && ln -sf /usr/local/lib/node_modules/agent-browser/bin/agent-browser.js /usr/local/bin/agent-browser \
   && chmod +x /usr/local/lib/node_modules/agent-browser/bin/agent-browser.js \
   && agent-browser --version
