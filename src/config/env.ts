@@ -35,6 +35,7 @@ export type AppConfig = {
   dashboardEnabled: boolean;
   dashboardHost: string;
   dashboardPort: number;
+  toolCallTelegramUpdatesEnabled: boolean;
 };
 
 function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
@@ -93,5 +94,6 @@ export function loadConfig(): AppConfig {
     dashboardEnabled: parseBoolean(Bun.env.DASHBOARD_ENABLED, true),
     dashboardHost: Bun.env.DASHBOARD_HOST ?? "127.0.0.1",
     dashboardPort: parseNumber(Bun.env.DASHBOARD_PORT ?? "8787", "DASHBOARD_PORT"),
+    toolCallTelegramUpdatesEnabled: parseBoolean(Bun.env.TOOL_CALL_TELEGRAM_UPDATES, false),
   };
 }

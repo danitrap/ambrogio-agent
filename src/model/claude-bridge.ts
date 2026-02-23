@@ -6,6 +6,7 @@ import type {
   ModelExecutionSummary,
   ModelRequest,
   ModelResponse,
+  ModelToolCallEvent,
 } from "./types";
 
 type BridgeOptions = {
@@ -49,6 +50,12 @@ type ClaudeAuditAction = {
   detail: string;
 };
 
+export type ClaudeToolCallAction = {
+  toolUseId?: string;
+  toolName: string;
+  detail: string;
+};
+
 function previewLogText(value: string, max = 240): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
   if (normalized.length <= max) {
@@ -59,6 +66,160 @@ function previewLogText(value: string, max = 240): string {
 
 function buildPromptText(request: ModelRequest): string {
   return request.message;
+}
+
+function compactDetail(value: string, max = 220): string {
+  const normalized = value.replaceAll(/\s+/g, " ").trim();
+  if (normalized.length <= max) {
+    return normalized;
+  }
+  return `${normalized.slice(0, max)}...`;
+}
+
+function summarizeToolInput(input: unknown): string {
+  if (input === null || input === undefined) {
+    return "no input";
+  }
+  if (typeof input === "string") {
+    return compactDetail(input);
+  }
+  if (typeof input !== "object") {
+    return compactDetail(String(input));
+  }
+  const record = input as Record<string, unknown>;
+  const preferredKeys = ["file_path", "path", "query", "url", "command", "cmd", "skill", "args"];
+  const parts: string[] = [];
+  for (const key of preferredKeys) {
+    const value = record[key];
+    if (value === undefined || value === null) {
+      continue;
+    }
+    parts.push(`${key}=${typeof value === "string" ? value : JSON.stringify(value)}`);
+  }
+  if (parts.length > 0) {
+    return compactDetail(parts.join(" "));
+  }
+  return compactDetail(JSON.stringify(input));
+}
+
+export function extractClaudeToolCallActionsFromEvent(
+  event: unknown,
+): ClaudeToolCallAction[] {
+  if (!event || typeof event !== "object") {
+    return [];
+  }
+  const record = event as Record<string, unknown>;
+  if (record.type !== "assistant") {
+    return [];
+  }
+  const message = record.message;
+  if (!message || typeof message !== "object") {
+    return [];
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const actions: ClaudeToolCallAction[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const toolCall = item as Record<string, unknown>;
+    if (toolCall.type !== "tool_use") {
+      continue;
+    }
+    const toolName = typeof toolCall.name === "string" ? toolCall.name.trim() : "";
+    if (!toolName) {
+      continue;
+    }
+    const toolUseId = typeof toolCall.id === "string" ? toolCall.id : undefined;
+    actions.push({
+      toolUseId,
+      toolName,
+      detail: summarizeToolInput(toolCall.input),
+    });
+  }
+  return actions;
+}
+
+export function splitTopLevelJsonArrayObjects(input: string): {
+  objects: string[];
+  remaining: string;
+} {
+  const objects: string[] = [];
+  if (input.length === 0) {
+    return { objects, remaining: "" };
+  }
+
+  const firstBracket = input.indexOf("[");
+  let index = firstBracket >= 0 ? firstBracket : 0;
+  let insideArray = firstBracket < 0;
+  let inString = false;
+  let escaping = false;
+  let depth = 0;
+  let objectStart = -1;
+  let lastConsumed = 0;
+
+  for (; index < input.length; index += 1) {
+    const char = input[index] ?? "";
+
+    if (!insideArray) {
+      if (char === "[") {
+        insideArray = true;
+        lastConsumed = index + 1;
+      }
+      continue;
+    }
+
+    if (objectStart === -1) {
+      if (char === "{") {
+        objectStart = index;
+        depth = 1;
+      } else if (char === "]") {
+        lastConsumed = index + 1;
+      } else if (char !== "," && char.trim().length > 0) {
+        // Unexpected top-level token while streaming an array; keep tail for fallback parsing.
+        return { objects, remaining: input.slice(index) };
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (char === "\\") {
+        escaping = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        objects.push(input.slice(objectStart, index + 1));
+        objectStart = -1;
+        lastConsumed = index + 1;
+      }
+    }
+  }
+
+  if (objectStart !== -1) {
+    const keepFrom = firstBracket >= 0 ? firstBracket : 0;
+    return { objects, remaining: input.slice(keepFrom) };
+  }
+  return { objects, remaining: input.slice(lastConsumed) };
 }
 
 export function extractClaudeAuditActions(
@@ -138,6 +299,53 @@ export function extractClaudeExecutionDetails(
   }
 
   return details;
+}
+
+async function readClaudeStdoutStream(params: {
+  stream: ReadableStream;
+  onEventObject?: (event: unknown) => Promise<void> | void;
+}): Promise<{ stdout: string; realtimeParseFailed: boolean }> {
+  const reader = params.stream.getReader();
+  const decoder = new TextDecoder();
+  let stdout = "";
+  let pending = "";
+  let realtimeParseFailed = false;
+
+  const processBuffer = async (): Promise<void> => {
+    const split = splitTopLevelJsonArrayObjects(pending);
+    pending = split.remaining;
+    for (const rawObject of split.objects) {
+      try {
+        const parsed = JSON.parse(rawObject) as unknown;
+        await params.onEventObject?.(parsed);
+      } catch {
+        realtimeParseFailed = true;
+      }
+    }
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      const chunk = decoder.decode(value, { stream: true });
+      stdout += chunk;
+      pending += chunk;
+      await processBuffer();
+    }
+    const tail = decoder.decode();
+    if (tail) {
+      stdout += tail;
+      pending += tail;
+      await processBuffer();
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return { stdout, realtimeParseFailed };
 }
 
 export class ClaudeBridge implements ModelBridge {
@@ -240,15 +448,64 @@ export class ClaudeBridge implements ModelBridge {
       return { text: "Model backend unavailable right now." };
     }
 
+    const emittedToolUseIds = new Set<string>();
+    let lastToolCallKey: string | null = null;
+    const emitToolCallEvent = async (event: ModelToolCallEvent, toolUseId?: string): Promise<void> => {
+      const dedupKey = `${event.type}:${event.toolName ?? ""}:${event.detail}`;
+      if (lastToolCallKey === dedupKey) {
+        return;
+      }
+      if (toolUseId && emittedToolUseIds.has(toolUseId)) {
+        return;
+      }
+      if (toolUseId) {
+        emittedToolUseIds.add(toolUseId);
+      }
+      lastToolCallKey = dedupKey;
+      try {
+        await request.onToolCallEvent?.(event);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn("claude_tool_call_event_emit_failed", {
+          ...correlationFields({ requestId }),
+          command: execCommand,
+          type: event.type,
+          toolName: event.toolName,
+          phase: event.phase,
+          source: event.source,
+          message,
+        });
+      }
+    };
+
     const stderrPromise = new Response(stderrStream).text();
-    const stdoutPromise = new Response(stdoutStream).text();
+    const stdoutPromise = readClaudeStdoutStream({
+      stream: stdoutStream,
+      onEventObject: async (streamEvent) => {
+        const actions = extractClaudeToolCallActionsFromEvent(streamEvent);
+        for (const action of actions) {
+          await emitToolCallEvent(
+            {
+              backend: "claude",
+              type: "claude_tool_call",
+              toolName: action.toolName,
+              detail: action.detail,
+              phase: "realtime",
+              source: "tool_use",
+            },
+            action.toolUseId,
+          );
+        }
+      },
+    });
 
     try {
       stdinSink.write(prompt);
       stdinSink.end();
       const exitCode = await process.exited;
       const stderr = (await stderrPromise).trim();
-      const stdout = (await stdoutPromise).trim();
+      const stdoutResult = await stdoutPromise;
+      const stdout = stdoutResult.stdout.trim();
 
       this.logger.info("claude_exec_streams", {
         ...correlationFields({ requestId }),
@@ -262,21 +519,22 @@ export class ClaudeBridge implements ModelBridge {
 
       let text = "";
       let jsonResponse: ClaudeJsonResponse | null = null;
+      let parsedResponse: unknown = null;
 
       // Try parsing JSON response
       try {
-        const parsed = JSON.parse(stdout);
+        parsedResponse = JSON.parse(stdout);
 
         // Handle verbose mode: array of objects with last one being the result
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsedResponse)) {
           // Find the last object with type: "result"
-          const resultObj = parsed.findLast((item: any) => item?.type === "result");
+          const resultObj = parsedResponse.findLast((item: any) => item?.type === "result");
           if (resultObj) {
             jsonResponse = resultObj as ClaudeJsonResponse;
           }
         } else {
           // Normal mode: single object
-          jsonResponse = parsed as ClaudeJsonResponse;
+          jsonResponse = parsedResponse as ClaudeJsonResponse;
         }
 
         if (jsonResponse) {
@@ -302,6 +560,34 @@ export class ClaudeBridge implements ModelBridge {
               auditActionCount: auditActions.length,
               auditActions,
             });
+            for (const action of auditActions) {
+              await emitToolCallEvent({
+                backend: "claude",
+                type: action.type,
+                detail: action.detail,
+                phase: "final_summary",
+                source: "usage_summary",
+              });
+            }
+          }
+
+          if (Array.isArray(parsedResponse)) {
+            for (const streamEvent of parsedResponse) {
+              const actions = extractClaudeToolCallActionsFromEvent(streamEvent);
+              for (const action of actions) {
+                await emitToolCallEvent(
+                  {
+                    backend: "claude",
+                    type: "claude_tool_call",
+                    toolName: action.toolName,
+                    detail: action.detail,
+                    phase: "realtime",
+                    source: "tool_use",
+                  },
+                  action.toolUseId,
+                );
+              }
+            }
           }
         }
       } catch {
@@ -313,6 +599,13 @@ export class ClaudeBridge implements ModelBridge {
           stdoutPreview: previewLogText(stdout),
         });
         text = stdout;
+      }
+
+      if (stdoutResult.realtimeParseFailed) {
+        this.logger.warn("claude_realtime_tool_parse_failed", {
+          ...correlationFields({ requestId }),
+          command: execCommand,
+        });
       }
 
       if (exitCode !== 0) {
@@ -385,7 +678,7 @@ export class ClaudeBridge implements ModelBridge {
       return { text: responseText };
     } catch (error) {
       const stderr = (await stderrPromise).trim();
-      const stdout = (await stdoutPromise).trim();
+      const stdout = (await stdoutPromise).stdout.trim();
       const durationMs = Date.now() - startedAt;
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error("claude_exec_streams_error", {

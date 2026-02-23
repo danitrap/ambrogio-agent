@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractCodexAuditActions } from "../src/model/exec-bridge";
+import { extractCodexAuditActionFromLine, extractCodexAuditActions } from "../src/model/codex-bridge";
 
 describe("extractCodexAuditActions", () => {
   test("extracts shell exec and web search actions from codex stderr", () => {
@@ -36,5 +36,19 @@ describe("extractCodexAuditActions", () => {
       { type: "web_search", detail: "Hacker News first post front page" },
       { type: "shell_exec", detail: "/bin/sh -lc 'ls -la' [cwd=/data] [status=succeeded]" },
     ]);
+  });
+
+  test("extracts single-line action for realtime parsing", () => {
+    expect(extractCodexAuditActionFromLine("🌐 Searched: meteo milano oggi")).toEqual({
+      type: "web_search",
+      detail: "meteo milano oggi",
+    });
+    expect(
+      extractCodexAuditActionFromLine("/bin/sh -lc 'ls -la' in /data succeeded in 50ms:"),
+    ).toEqual({
+      type: "shell_exec",
+      detail: "/bin/sh -lc 'ls -la' [cwd=/data] [status=succeeded]",
+    });
+    expect(extractCodexAuditActionFromLine("thinking...")).toBeNull();
   });
 });

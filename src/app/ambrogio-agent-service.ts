@@ -1,6 +1,6 @@
 import type { TelegramAllowlist } from "../auth/allowlist";
 import type { Logger } from "../logging/audit";
-import type { ModelBridge } from "../model/types";
+import type { ModelBridge, ModelToolCallEvent } from "../model/types";
 import { buildPersonalizationHints, type MemoryStore } from "../runtime/memory-context";
 
 type ConversationStore = {
@@ -23,7 +23,13 @@ export class AmbrogioAgentService {
 
   constructor(private readonly deps: AmbrogioAgentDependencies) {}
 
-  async handleMessage(userId: number, text: string, requestId?: string, signal?: AbortSignal): Promise<string> {
+  async handleMessage(
+    userId: number,
+    text: string,
+    requestId?: string,
+    signal?: AbortSignal,
+    onToolCallEvent?: (event: ModelToolCallEvent) => Promise<void> | void,
+  ): Promise<string> {
     if (!this.deps.allowlist.isAllowed(userId)) {
       this.deps.logger.warn("unauthorized_user", { userId });
       return "Unauthorized user.";
@@ -48,6 +54,7 @@ export class AmbrogioAgentService {
       requestId,
       message: contextualMessage,
       signal,
+      onToolCallEvent,
     });
     const responseText = modelResponse.text || "Done.";
 

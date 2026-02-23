@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { extractClaudeAuditActions } from "../src/model/claude-bridge";
+import {
+  extractClaudeAuditActions,
+  extractClaudeToolCallActionsFromEvent,
+  splitTopLevelJsonArrayObjects,
+} from "../src/model/claude-bridge";
 
 describe("extractClaudeAuditActions", () => {
   test("extracts web search and fetch counts", () => {
@@ -72,5 +76,57 @@ describe("extractClaudeAuditActions", () => {
     expect(actions).toHaveLength(2);
     expect(actions[0]?.detail).toBe("1 search");
     expect(actions[1]?.detail).toBe("1 fetch");
+  });
+});
+
+describe("extractClaudeToolCallActionsFromEvent", () => {
+  test("extracts tool_use actions from assistant events", () => {
+    const event = {
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_1",
+            name: "Read",
+            input: { file_path: "/data/groceries.md" },
+          },
+          {
+            type: "text",
+            text: "Let me read that file",
+          },
+        ],
+      },
+    };
+
+    const actions = extractClaudeToolCallActionsFromEvent(event);
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.toolUseId).toBe("toolu_1");
+    expect(actions[0]?.toolName).toBe("Read");
+    expect(actions[0]?.detail).toContain("/data/groceries.md");
+  });
+
+  test("returns no actions for non-tool events", () => {
+    const actions = extractClaudeToolCallActionsFromEvent({
+      type: "user",
+      message: { content: [{ type: "text", text: "hi" }] },
+    });
+    expect(actions).toHaveLength(0);
+  });
+});
+
+describe("splitTopLevelJsonArrayObjects", () => {
+  test("extracts complete objects from streaming array chunks", () => {
+    const firstChunk = '[{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/data/g';
+    const secondChunk = 'roceries.md"}}]}},{"type":"result","result":"ok"}]';
+
+    const first = splitTopLevelJsonArrayObjects(firstChunk);
+    expect(first.objects).toHaveLength(0);
+
+    const second = splitTopLevelJsonArrayObjects(first.remaining + secondChunk);
+    expect(second.objects).toHaveLength(2);
+    expect(second.remaining.trim()).toBe("");
+    expect(second.objects[0]).toContain('"type":"assistant"');
+    expect(second.objects[1]).toContain('"type":"result"');
   });
 });

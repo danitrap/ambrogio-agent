@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ModelBridge } from "../src/model/types";
+import type { ModelBridge, ModelToolCallEvent } from "../src/model/types";
 import { AmbrogioAgentService } from "../src/app/ambrogio-agent-service";
 import { TelegramAllowlist } from "../src/auth/allowlist";
 import { Logger } from "../src/logging/audit";
@@ -160,5 +160,26 @@ describe("AmbrogioAgentService", () => {
 
     expect(seenMessages).toHaveLength(1);
     expect(seenMessages[0]).toBe("ciao");
+  });
+
+  test("forwards onToolCallEvent callback to model bridge", async () => {
+    let seenEventCallback: ((event: ModelToolCallEvent) => Promise<void> | void) | undefined;
+    const model: ModelBridge = {
+      respond: async (request) => {
+        seenEventCallback = request.onToolCallEvent;
+        return { text: "ok" };
+      },
+    };
+
+    const service = new AmbrogioAgentService({
+      allowlist: new TelegramAllowlist(1),
+      modelBridge: model,
+      logger: new Logger("error"),
+    });
+
+    const callback = () => {};
+    await service.handleMessage(1, "ciao", "req-1", undefined, callback);
+
+    expect(seenEventCallback).toBe(callback);
   });
 });

@@ -1,6 +1,6 @@
 import type { Logger } from "../logging/audit";
 import { correlationFields } from "../logging/correlation";
-import type { ModelBridge, ModelExecutionSummary, ModelRequest, ModelResponse } from "./types";
+import type { ModelBridge, ModelExecutionSummary, ModelRequest, ModelResponse, ModelToolCallEvent } from "./types";
 import { readFile, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -36,44 +36,102 @@ function compactDetail(value: string, max = 220): string {
   return `${normalized.slice(0, max)}...`;
 }
 
+export function extractCodexAuditActionFromLine(line: string): CodexAuditAction | null {
+  const searchMatch = line.match(/🌐\s*Searched:\s*(.+)/);
+  if (searchMatch) {
+    const query = compactDetail(searchMatch[1] ?? "");
+    if (query) {
+      return { type: "web_search", detail: query };
+    }
+  }
+
+  const shellMatch = line.match(/^(.+)\s+in\s+(\S+)\s+(succeeded|exited|failed)\b.*$/);
+  if (!shellMatch) {
+    return null;
+  }
+  const command = (shellMatch[1] ?? "").trim();
+  const cwd = (shellMatch[2] ?? "").trim();
+  const status = (shellMatch[3] ?? "").trim();
+  if (!command || !cwd || !status) {
+    return null;
+  }
+  return {
+    type: "shell_exec",
+    detail: compactDetail(`${command} [cwd=${cwd}] [status=${status}]`),
+  };
+}
+
 export function extractCodexAuditActions(stderr: string): CodexAuditAction[] {
   const actions: CodexAuditAction[] = [];
   const seen = new Set<string>();
 
-  for (const match of stderr.matchAll(/🌐\s*Searched:\s*(.+)/g)) {
-    const query = compactDetail(match[1] ?? "");
-    if (!query) {
-      continue;
-    }
-    const key = `web_search:${query}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    actions.push({ type: "web_search", detail: query });
-  }
-
   for (const line of stderr.split("\n")) {
-    const match = line.match(/^(.+)\s+in\s+(\S+)\s+(succeeded|exited|failed)\b.*$/);
-    if (!match) {
+    const action = extractCodexAuditActionFromLine(line);
+    if (!action) {
       continue;
     }
-    const command = (match[1] ?? "").trim();
-    const cwd = (match[2] ?? "").trim();
-    const status = (match[3] ?? "").trim();
-    if (!command || !cwd || !status) {
-      continue;
-    }
-    const detail = compactDetail(`${command} [cwd=${cwd}] [status=${status}]`);
-    const key = `shell_exec:${detail}`;
+    const key = `${action.type}:${action.detail}`;
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
-    actions.push({ type: "shell_exec", detail });
+    actions.push(action);
   }
 
   return actions;
+}
+
+async function readCodexStderrStream(params: {
+  stream: ReadableStream;
+  onAction?: (action: CodexAuditAction) => Promise<void> | void;
+}): Promise<string> {
+  const reader = params.stream.getReader();
+  const decoder = new TextDecoder();
+  const seen = new Set<string>();
+  let text = "";
+  let pending = "";
+
+  const flushLine = async (line: string): Promise<void> => {
+    const action = extractCodexAuditActionFromLine(line);
+    if (!action) {
+      return;
+    }
+    const key = `${action.type}:${action.detail}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    await params.onAction?.(action);
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      const chunk = decoder.decode(value, { stream: true });
+      text += chunk;
+      pending += chunk;
+      const lines = pending.split("\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        await flushLine(line);
+      }
+    }
+    const tail = decoder.decode();
+    if (tail) {
+      text += tail;
+      pending += tail;
+    }
+    if (pending.length > 0) {
+      await flushLine(pending);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return text;
 }
 
 export class CodexBridge implements ModelBridge {
@@ -177,7 +235,29 @@ export class CodexBridge implements ModelBridge {
       return { text: "Model backend unavailable right now." };
     }
 
-    const stderrPromise = new Response(stderrStream).text();
+    const stderrPromise = readCodexStderrStream({
+      stream: stderrStream,
+      onAction: async (action) => {
+        const event: ModelToolCallEvent = {
+          backend: "codex",
+          type: action.type,
+          detail: action.detail,
+          phase: "realtime",
+        };
+        try {
+          await request.onToolCallEvent?.(event);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.logger.warn("codex_tool_call_event_emit_failed", {
+            ...correlationFields({ requestId }),
+            command: execCommand,
+            type: event.type,
+            phase: event.phase,
+            message,
+          });
+        }
+      },
+    });
     const stdoutPromise = new Response(stdoutStream).text();
 
     try {

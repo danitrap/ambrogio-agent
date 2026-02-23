@@ -14,13 +14,14 @@ import { handleTelegramCommand } from "./runtime/command-handlers";
 import { createHeartbeatRunner } from "./runtime/heartbeat-runner";
 import { parseQuietHours } from "./runtime/heartbeat-quiet-hours";
 import { HEARTBEAT_FILE_NAME, HEARTBEAT_INTERVAL_MS } from "./runtime/heartbeat";
-import { sendTelegramFormattedMessage, sendTelegramTextReply } from "./runtime/message-sender";
+import { sendTelegramTextReply } from "./runtime/message-sender";
 import { dispatchAssistantReply, resolveAudioPathForUpload } from "./runtime/reply-dispatcher";
 import { StateStore } from "./runtime/state-store";
 import { startJobRpcServer } from "./runtime/job-rpc-server";
 import { createTelegramInputBuffer, type BufferedTelegramInput } from "./runtime/telegram-input-buffer";
 import { startTelegramUpdateLoop } from "./runtime/telegram-update-loop";
 import { parseOpenTodoItems } from "./runtime/todo-snapshot";
+import { createToolCallTelegramNotifier } from "./runtime/tool-call-updates";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
 import { bootstrapAgentsFile } from "./agents/bootstrap";
@@ -404,6 +405,16 @@ async function main(): Promise<void> {
     }
   };
 
+  const notifyToolCallUpdate = createToolCallTelegramNotifier({
+    enabled: config.toolCallTelegramUpdatesEnabled,
+    chatId: config.telegramAllowedUserId,
+    telegram,
+    logger,
+    onSentText: async (text) => {
+      await recordRecentTelegramEntry("assistant", `tool update: ${previewText(text, 120)}`);
+    },
+  });
+
   const backgroundDeliveryInFlight = new Set<string>();
 
   const deliverBackgroundJob = async (job: PendingBackgroundJob, trigger: "completion" | "heartbeat"): Promise<boolean> => {
@@ -517,7 +528,13 @@ async function main(): Promise<void> {
     const prefixedPrompt = `⏰ [Background Job]\n\n${prompt}`;
 
     try {
-      const reply = await ambrogioAgent.handleMessage(job.userId, prefixedPrompt, `delayed-${job.taskId}`);
+      const reply = await ambrogioAgent.handleMessage(
+        job.userId,
+        prefixedPrompt,
+        `delayed-${job.taskId}`,
+        undefined,
+        notifyToolCallUpdate,
+      );
 
       if (isRecurring) {
         // For recurring jobs: reschedule before delivery
@@ -618,6 +635,7 @@ async function main(): Promise<void> {
           requestId,
           message: prompt,
           signal: controller.signal,
+          onToolCallEvent: notifyToolCallUpdate,
         });
       })(),
       MODEL_TIMEOUT_MS,
@@ -986,7 +1004,13 @@ async function main(): Promise<void> {
             : "Posso gestire solo messaggi testuali o vocali.";
         }
 
-        const modelReply = await ambrogioAgent.handleMessage(input.userId, promptText, String(input.lastUpdateId), signal);
+        const modelReply = await ambrogioAgent.handleMessage(
+          input.userId,
+          promptText,
+          String(input.lastUpdateId),
+          signal,
+          notifyToolCallUpdate,
+        );
         lastPromptByUser.set(input.userId, promptText);
         return modelReply;
       },
@@ -1078,7 +1102,13 @@ async function main(): Promise<void> {
           update,
           commandName,
           requestPreview: prompt,
-          operation: (signal) => ambrogioAgent.handleMessage(update.userId, prompt, String(update.updateId), signal),
+          operation: (signal) => ambrogioAgent.handleMessage(
+            update.userId,
+            prompt,
+            String(update.updateId),
+            signal,
+            notifyToolCallUpdate,
+          ),
         });
         if (result.ok) {
           handledMessages += 1;
