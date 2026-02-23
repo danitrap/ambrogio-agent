@@ -21,16 +21,18 @@ RUN apt-get update \
     libnss3 \
     libxcomposite1 \
     libxdamage1 \
-    nodejs \
-    npm \
     tzdata \
+  && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+  && apt-get install -y --no-install-recommends nodejs \
+  && node -v \
+  && npm -v \
   && rm -rf /var/lib/apt/lists/*
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN mkdir -p /ms-playwright && chmod 755 /ms-playwright
 RUN pip3 install --break-system-packages uv \
   && npm install -g @openai/codex agent-browser @steipete/summarize \
-  && ln -sf /usr/local/lib/node_modules/agent-browser/bin/agent-browser.js /usr/local/bin/agent-browser \
-  && chmod +x /usr/local/lib/node_modules/agent-browser/bin/agent-browser.js \
+  && command -v agent-browser \
   && agent-browser --version
 RUN agent-browser install
 
