@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { Database } from "bun:sqlite";
+import { ensureHeadlessScheduledPrompt } from "./scheduled-job-headless";
 
 export type ConversationEntry = { role: "user" | "assistant"; text: string };
 export type ConversationStats = { entries: number; userTurns: number; assistantTurns: number; hasContext: boolean };
@@ -78,6 +79,7 @@ type JobRow = {
 };
 
 type BackgroundTaskRow = JobRow; // Backwards compatibility
+type CronPromptRow = { task_id: string; payload_prompt: string | null; request_preview: string };
 
 export class StateStore {
   private readonly db: Database;
@@ -750,6 +752,58 @@ export class StateStore {
 
   clearBackgroundJobs(): void {
     this.db.run("DELETE FROM jobs");
+  }
+
+  recoverOrphanRunningScheduledJobs(): number {
+    const now = new Date().toISOString();
+    const result = this.db.run(
+      `UPDATE jobs
+       SET status = 'scheduled',
+           updated_at = ?1
+       WHERE status = 'running'
+         AND kind IN ('delayed', 'recurring')`,
+      [now],
+    );
+    return result.changes ?? 0;
+  }
+
+  normalizeExistingScheduledHeadlessPrompts(): number {
+    const rows = this.db
+      .query(
+        `SELECT task_id, payload_prompt, request_preview
+         FROM jobs
+         WHERE recurrence_type = 'cron' OR kind = 'delayed'`,
+      )
+      .all() as CronPromptRow[];
+
+    if (rows.length === 0) {
+      return 0;
+    }
+
+    const now = new Date().toISOString();
+    const update = this.db.query(
+      `UPDATE jobs
+       SET payload_prompt = ?2,
+           updated_at = ?3
+       WHERE task_id = ?1`,
+    );
+
+    let updatedCount = 0;
+    for (const row of rows) {
+      const sourcePrompt = row.payload_prompt ?? row.request_preview;
+      const normalizedPrompt = ensureHeadlessScheduledPrompt(sourcePrompt);
+      if (row.payload_prompt === normalizedPrompt) {
+        continue;
+      }
+      update.run(row.task_id, normalizedPrompt, now);
+      updatedCount += 1;
+    }
+
+    return updatedCount;
+  }
+
+  normalizeExistingCronPrompts(): number {
+    return this.normalizeExistingScheduledHeadlessPrompts();
   }
 
   // Recurring job methods

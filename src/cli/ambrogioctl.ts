@@ -24,6 +24,39 @@ function hasFlag(args: string[], name: string): boolean {
   return args.includes(name);
 }
 
+function getEnvValue(deps: RunDeps, key: string): string | undefined {
+  if (deps.env) {
+    return deps.env[key];
+  }
+  return process.env[key];
+}
+
+function resolveAuthorizedTelegramIds(args: string[], deps: RunDeps, stderr: (line: string) => void): {
+  userId: number;
+  chatId: number;
+} | null {
+  const explicitUserId = readFlag(args, "--user-id");
+  const explicitChatId = readFlag(args, "--chat-id");
+  const allowedUserId = getEnvValue(deps, "TELEGRAM_ALLOWED_USER_ID");
+
+  const normalizedUserIdRaw = explicitUserId ?? allowedUserId ?? null;
+  const normalizedChatIdRaw = explicitChatId ?? allowedUserId ?? null;
+
+  if (!normalizedUserIdRaw || !normalizedChatIdRaw) {
+    stderr("Missing Telegram target identity. Set TELEGRAM_ALLOWED_USER_ID (or provide --user-id/--chat-id).");
+    return null;
+  }
+
+  const userId = Number(normalizedUserIdRaw);
+  const chatId = Number(normalizedChatIdRaw);
+  if (Number.isNaN(userId) || Number.isNaN(chatId)) {
+    stderr("Resolved userId/chatId are invalid. TELEGRAM_ALLOWED_USER_ID must be a valid number.");
+    return null;
+  }
+
+  return { userId, chatId };
+}
+
 function mapErrorCodeToExit(code: string): number {
   if (code === "NOT_FOUND") {
     return 3;
@@ -182,15 +215,15 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
 
   if (scope === "telegram") {
     if (!action) {
-      stderr("Usage: ambrogioctl telegram <send-message|send-photo|send-audio|send-document> --text <text> | --path <absolute-path-under-data-root> [--json]");
+      stderr("Usage: ambrogioctl telegram <send-message|send-photo|send-audio|send-document> --text <text> | <text> | --path <absolute-path-under-data-root> [--json]");
       return 2;
     }
 
     // Handle send-message separately
     if (action === "send-message") {
-      const text = readFlag(args, "--text");
+      const text = readFlag(args, "--text") ?? args.filter((arg) => !arg.startsWith("--")).join(" ").trim();
       if (!text) {
-        stderr("Missing --text flag");
+        stderr("Missing text. Use --text \"...\" or positional message.");
         return 2;
       }
 
@@ -387,7 +420,7 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
     }
 
     const json = hasFlag(args, "--json");
-    const userIdRaw = readFlag(args, "--user-id") ?? process.env.TELEGRAM_ALLOWED_USER_ID;
+    const userIdRaw = readFlag(args, "--user-id") ?? getEnvValue(deps, "TELEGRAM_ALLOWED_USER_ID");
     if (!userIdRaw) {
       stderr("--user-id is required (or set TELEGRAM_ALLOWED_USER_ID environment variable)");
       return 2;
@@ -555,21 +588,17 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
     if (action === "create-recurring") {
       const runAtIso = readFlag(args, "--run-at");
       const prompt = readFlag(args, "--prompt");
-      const userIdRaw = readFlag(args, "--user-id");
-      const chatIdRaw = readFlag(args, "--chat-id");
       const recurrenceType = readFlag(args, "--type");
       const recurrenceExpression = readFlag(args, "--expression");
       const maxRunsRaw = readFlag(args, "--max-runs");
 
-      if (!runAtIso || !prompt || !userIdRaw || !chatIdRaw || !recurrenceType || !recurrenceExpression) {
-        stderr("--run-at, --prompt, --user-id, --chat-id, --type, --expression are required.");
+      if (!runAtIso || !prompt || !recurrenceType || !recurrenceExpression) {
+        stderr("--run-at, --prompt, --type, --expression are required.");
         return 2;
       }
 
-      const userId = Number(userIdRaw);
-      const chatId = Number(chatIdRaw);
-      if (Number.isNaN(userId) || Number.isNaN(chatId)) {
-        stderr("--user-id and --chat-id must be numbers.");
+      const targetIds = resolveAuthorizedTelegramIds(args, deps, stderr);
+      if (!targetIds) {
         return 2;
       }
 
@@ -582,8 +611,8 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
       payload = {
         runAtIso,
         prompt,
-        userId,
-        chatId,
+        userId: targetIds.userId,
+        chatId: targetIds.chatId,
         recurrenceType,
         recurrenceExpression,
       };
@@ -647,24 +676,20 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
     } else if (action === "create") {
       const runAtIso = readFlag(args, "--run-at");
       const prompt = readFlag(args, "--prompt");
-      const userIdRaw = readFlag(args, "--user-id");
-      const chatIdRaw = readFlag(args, "--chat-id");
-      if (!runAtIso || !prompt || !userIdRaw || !chatIdRaw) {
-        stderr("--run-at, --prompt, --user-id, --chat-id are required.");
+      if (!runAtIso || !prompt) {
+        stderr("--run-at and --prompt are required.");
         return 2;
       }
-      const userId = Number(userIdRaw);
-      const chatId = Number(chatIdRaw);
-      if (Number.isNaN(userId) || Number.isNaN(chatId)) {
-        stderr("--user-id and --chat-id must be numbers.");
+      const targetIds = resolveAuthorizedTelegramIds(args, deps, stderr);
+      if (!targetIds) {
         return 2;
       }
       op = "jobs.create";
       payload = {
         runAtIso,
         prompt,
-        userId,
-        chatId,
+        userId: targetIds.userId,
+        chatId: targetIds.chatId,
       };
     } else if (action === "mute") {
       const id = readFlag(args, "--id");

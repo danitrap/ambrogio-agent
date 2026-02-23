@@ -15,7 +15,13 @@ import { createHeartbeatRunner } from "./runtime/heartbeat-runner";
 import { parseQuietHours } from "./runtime/heartbeat-quiet-hours";
 import { HEARTBEAT_FILE_NAME, HEARTBEAT_INTERVAL_MS } from "./runtime/heartbeat";
 import { sendTelegramTextReply } from "./runtime/message-sender";
+import { buildActiveJobsFastReply, isActiveJobsListQuery } from "./runtime/active-jobs-fast-path";
 import { dispatchAssistantReply, resolveAudioPathForUpload } from "./runtime/reply-dispatcher";
+import {
+  buildScheduledJobExecutionPrompt,
+  shouldDisableImplicitScheduledDelivery,
+  shouldSuppressScheduledJobDelivery,
+} from "./runtime/scheduled-job-headless";
 import { StateStore } from "./runtime/state-store";
 import { startJobRpcServer } from "./runtime/job-rpc-server";
 import { createTelegramInputBuffer, type BufferedTelegramInput } from "./runtime/telegram-input-buffer";
@@ -311,6 +317,14 @@ async function main(): Promise<void> {
   const tts = config.elevenLabsApiKey ? new ElevenLabsTts(config.elevenLabsApiKey) : null;
   const stateStore = await StateStore.open(config.dataRoot);
   logger.info("state_store_opened", { dbPath: path.join(config.dataRoot, "runtime", "state.db") });
+  const recoveredOrphanJobs = stateStore.recoverOrphanRunningScheduledJobs();
+  if (recoveredOrphanJobs > 0) {
+    logger.warn("scheduled_orphan_jobs_recovered", { recoveredJobs: recoveredOrphanJobs });
+  }
+  const normalizedHeadlessPrompts = stateStore.normalizeExistingScheduledHeadlessPrompts();
+  if (normalizedHeadlessPrompts > 0) {
+    logger.info("scheduled_headless_prompts_normalized", { updatedJobs: normalizedHeadlessPrompts });
+  }
   const dashboardSnapshotService = createDashboardSnapshotService({
     stateStore,
     dataRoot: config.dataRoot,
@@ -418,6 +432,17 @@ async function main(): Promise<void> {
   const backgroundDeliveryInFlight = new Set<string>();
 
   const deliverBackgroundJob = async (job: PendingBackgroundJob, trigger: "completion" | "heartbeat"): Promise<boolean> => {
+    if (job.kind === "delayed" || job.kind === "recurring") {
+      stateStore.markBackgroundJobDelivered(job.taskId);
+      logger.info("scheduled_job_delivery_disabled", {
+        jobId: job.taskId,
+        kind: job.kind,
+        trigger,
+        status: job.status,
+      });
+      return true;
+    }
+
     if (!job.deliveryText) {
       logger.warn("background_job_missing_delivery_text", {
         jobId: job.taskId,
@@ -524,8 +549,7 @@ async function main(): Promise<void> {
     const prompt = job.payloadPrompt ?? job.requestPreview;
     const isRecurring = job.kind === "recurring";
 
-    // Prepend background job prefix to prompt
-    const prefixedPrompt = `⏰ [Background Job]\n\n${prompt}`;
+    const prefixedPrompt = buildScheduledJobExecutionPrompt(prompt, job.kind, job.recurrenceType);
 
     try {
       const reply = await ambrogioAgent.handleMessage(
@@ -535,6 +559,9 @@ async function main(): Promise<void> {
         undefined,
         notifyToolCallUpdate,
       );
+
+      const disableImplicitDelivery = shouldDisableImplicitScheduledDelivery(job.kind, job.recurrenceType);
+      const suppressDelivery = disableImplicitDelivery || shouldSuppressScheduledJobDelivery(reply, job.kind, job.recurrenceType);
 
       if (isRecurring) {
         // For recurring jobs: reschedule before delivery
@@ -556,7 +583,20 @@ async function main(): Promise<void> {
         }
       }
 
-      // Always deliver results
+      if (suppressDelivery) {
+        logger.info("scheduled_job_delivery_suppressed_headless", {
+          jobId: job.taskId,
+          implicitDeliveryDisabled: disableImplicitDelivery,
+          recurrenceType: job.recurrenceType,
+        });
+        const refreshedSuppressed = stateStore.getBackgroundJob(job.taskId);
+        if (refreshedSuppressed?.status === "completed_pending_delivery") {
+          stateStore.markBackgroundJobDelivered(job.taskId);
+        }
+        return;
+      }
+
+      // Deliver results when not explicitly suppressed
       const refreshed = stateStore.getBackgroundJob(job.taskId);
       if (!refreshed) {
         return;
@@ -583,6 +623,18 @@ async function main(): Promise<void> {
           logger.info("scheduled_job_failure_dropped", { jobId: job.taskId, reason: "status_changed" });
           return;
         }
+      }
+
+      if (shouldDisableImplicitScheduledDelivery(job.kind, job.recurrenceType)) {
+        logger.info("scheduled_job_failure_delivery_suppressed_headless", {
+          jobId: job.taskId,
+          recurrenceType: job.recurrenceType,
+        });
+        const refreshedSuppressed = stateStore.getBackgroundJob(job.taskId);
+        if (refreshedSuppressed?.status === "failed_pending_delivery") {
+          stateStore.markBackgroundJobDelivered(job.taskId);
+        }
+        return;
       }
 
       const refreshed = stateStore.getBackgroundJob(job.taskId);
@@ -1273,6 +1325,38 @@ async function main(): Promise<void> {
 
       });
       if (commandHandled) {
+        return;
+      }
+
+      if (
+        update.text &&
+        update.voiceFileId === null &&
+        update.attachments.length === 0 &&
+        allowlist.isAllowed(update.userId) &&
+        isActiveJobsListQuery(update.text)
+      ) {
+        const activeJobs = stateStore
+          .getActiveBackgroundJobs(200)
+          .filter((job) => job.userId === update.userId && job.chatId === update.chatId)
+          .filter((job) => !(job.kind === "recurring" && job.status === "scheduled" && !job.recurrenceEnabled));
+        const reply = buildActiveJobsFastReply(activeJobs);
+        logger.info("active_jobs_fast_path_served", {
+          updateId: update.updateId,
+          userId: update.userId,
+          chatId: update.chatId,
+          activeJobs: activeJobs.length,
+          textPreview: previewText(update.text),
+        });
+        await sendTelegramTextReply({
+          telegram,
+          logger,
+          update,
+          text: reply,
+          onSentText: async (text) => {
+            await recordRecentTelegramEntry("assistant", `text: ${previewText(text, 120)}`);
+          },
+        });
+        handledMessages += 1;
         return;
       }
 

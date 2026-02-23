@@ -126,6 +126,53 @@ describe("StateStore", () => {
     store.close();
   });
 
+  test("recovers orphan running scheduled jobs without touching background jobs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "state-store-"));
+    tempDirs.push(root);
+
+    const store = await StateStore.open(root);
+    const runAt = new Date(Date.now() - 60_000).toISOString();
+
+    store.createDelayedJob({
+      jobId: "dl-recover-1",
+      updateId: 1,
+      userId: 2,
+      chatId: 3,
+      prompt: "Delayed recover",
+      requestPreview: "Delayed recover",
+      runAt,
+    });
+    store.createRecurringJob({
+      jobId: "rc-recover-1",
+      updateId: 1,
+      userId: 2,
+      chatId: 3,
+      prompt: "Recurring recover",
+      requestPreview: "Recurring recover",
+      runAt,
+      recurrenceType: "interval",
+      recurrenceExpression: "1h",
+    });
+    store.createBackgroundJob({
+      jobId: "bg-running-1",
+      updateId: 1,
+      userId: 2,
+      chatId: 3,
+      requestPreview: "Background running",
+    });
+
+    expect(store.claimScheduledJob("dl-recover-1")).toBe(true);
+    expect(store.claimScheduledJob("rc-recover-1")).toBe(true);
+
+    const recovered = store.recoverOrphanRunningScheduledJobs();
+    expect(recovered).toBe(2);
+
+    expect(store.getBackgroundJob("dl-recover-1")?.status).toBe("scheduled");
+    expect(store.getBackgroundJob("rc-recover-1")?.status).toBe("scheduled");
+    expect(store.getBackgroundJob("bg-running-1")?.status).toBe("running");
+    store.close();
+  });
+
   test("treats equivalent offset/zulu runAt values as due", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "state-store-"));
     tempDirs.push(root);
@@ -375,6 +422,47 @@ describe("StateStore", () => {
     expect(tram1?.mutedUntil).toBe(mutedUntil);
     expect(tram2?.mutedUntil).toBe(mutedUntil);
     expect(weather?.mutedUntil).toBeNull();
+    store.close();
+  });
+
+  test("normalizes persisted headless prompts for cron and delayed jobs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "state-store-"));
+    tempDirs.push(root);
+
+    const store = await StateStore.open(root);
+    store.createRecurringJob({
+      jobId: "rc-cron-normalize-1",
+      updateId: 1,
+      userId: 123,
+      chatId: 123,
+      prompt: "Invia meteo Palermo",
+      requestPreview: "Invia meteo Palermo",
+      runAt: new Date(Date.now() + 3600000).toISOString(),
+      recurrenceType: "cron",
+      recurrenceExpression: "0 9 * * *",
+    });
+    store.createDelayedJob({
+      jobId: "dl-headless-normalize-1",
+      updateId: 2,
+      userId: 123,
+      chatId: 123,
+      prompt: "Invia reminder",
+      requestPreview: "Invia reminder",
+      runAt: new Date(Date.now() + 3600000).toISOString(),
+    });
+
+    const updated = store.normalizeExistingScheduledHeadlessPrompts();
+    expect(updated).toBe(2);
+
+    const cronJob = store.getBackgroundJob("rc-cron-normalize-1");
+    const delayedJob = store.getBackgroundJob("dl-headless-normalize-1");
+    expect(cronJob?.payloadPrompt).toContain("[Execution Mode: HEADLESS_SCHEDULED]");
+    expect(cronJob?.payloadPrompt).toContain("Invia meteo Palermo");
+    expect(delayedJob?.payloadPrompt).toContain("[Execution Mode: HEADLESS_SCHEDULED]");
+    expect(delayedJob?.payloadPrompt).toContain("Invia reminder");
+
+    const secondPass = store.normalizeExistingScheduledHeadlessPrompts();
+    expect(secondPass).toBe(0);
     store.close();
   });
 });

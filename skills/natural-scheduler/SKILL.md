@@ -15,13 +15,14 @@ description: Manage Ambrogio runtime jobs (background, delayed, recurring, muted
 - Execute job operations only via `ambrogioctl ... --json`.
 - Never invent job IDs.
 - Never output raw JSON to user.
+- Never pass `--user-id` or `--chat-id` for jobs create operations. `ambrogioctl` must infer both from `TELEGRAM_ALLOWED_USER_ID`.
 - If TODO vs runtime job is ambiguous, ask explicit confirmation.
 
 ## Intent-to-Command Map
 - List jobs: `ambrogioctl jobs list --json`
 - Inspect: `ambrogioctl jobs inspect --id <jobId> --json`
-- Create delayed: `ambrogioctl jobs create --run-at <ISO> --prompt "<text>" --user-id <id> --chat-id <id> --json`
-- Create recurring: `ambrogioctl jobs create-recurring --run-at <ISO> --prompt "<text>" --user-id <id> --chat-id <id> --type <interval|cron> --expression <expr> --json`
+- Create delayed: `ambrogioctl jobs create --run-at <ISO> --prompt "<text>" --json`
+- Create recurring: `ambrogioctl jobs create-recurring --run-at <ISO> --prompt "<text>" --type <interval|cron> --expression <expr> --json`
 - Retry: `ambrogioctl jobs retry --id <jobId> --json`
 - Cancel: `ambrogioctl jobs cancel --id <jobId> --json`
 - Pause/resume: `ambrogioctl jobs pause|resume --id <jobId> --json`

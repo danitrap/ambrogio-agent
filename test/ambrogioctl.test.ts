@@ -88,7 +88,7 @@ describe("ambrogioctl", () => {
     expect(out[0]).toContain("handledMessages: 10");
   });
 
-  test("jobs create sends required payload", async () => {
+  test("jobs create resolves user/chat from TELEGRAM_ALLOWED_USER_ID", async () => {
     const calls: RecordedCall[] = [];
     const code = await runAmbrogioCtl(
       [
@@ -98,13 +98,10 @@ describe("ambrogioctl", () => {
         "2099-01-01T10:00:00.000Z",
         "--prompt",
         "hello",
-        "--user-id",
-        "1",
-        "--chat-id",
-        "2",
       ],
       {
         socketPath: "/tmp/ambrogio.sock",
+        env: { TELEGRAM_ALLOWED_USER_ID: "777" },
         sendRpc: async (op, args) => {
           calls.push({ op, args });
           return { ok: true, result: { taskId: "dl-rpc-1" } };
@@ -121,11 +118,78 @@ describe("ambrogioctl", () => {
         args: {
           runAtIso: "2099-01-01T10:00:00.000Z",
           prompt: "hello",
-          userId: 1,
-          chatId: 2,
+          userId: 777,
+          chatId: 777,
         },
       },
     ]);
+  });
+
+  test("jobs create-recurring resolves user/chat from TELEGRAM_ALLOWED_USER_ID", async () => {
+    const calls: RecordedCall[] = [];
+    const code = await runAmbrogioCtl(
+      [
+        "jobs",
+        "create-recurring",
+        "--run-at",
+        "2099-01-01T10:00:00.000Z",
+        "--prompt",
+        "daily check",
+        "--type",
+        "cron",
+        "--expression",
+        "0 9 * * *",
+      ],
+      {
+        socketPath: "/tmp/ambrogio.sock",
+        env: { TELEGRAM_ALLOWED_USER_ID: "888" },
+        sendRpc: async (op, args) => {
+          calls.push({ op, args });
+          return { ok: true, result: { taskId: "rc-rpc-1" } };
+        },
+        stdout: () => {},
+        stderr: () => {},
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([
+      {
+        op: "jobs.create-recurring",
+        args: {
+          runAtIso: "2099-01-01T10:00:00.000Z",
+          prompt: "daily check",
+          userId: 888,
+          chatId: 888,
+          recurrenceType: "cron",
+          recurrenceExpression: "0 9 * * *",
+        },
+      },
+    ]);
+  });
+
+  test("jobs create fails when TELEGRAM_ALLOWED_USER_ID is missing", async () => {
+    const err: string[] = [];
+    const code = await runAmbrogioCtl(
+      [
+        "jobs",
+        "create",
+        "--run-at",
+        "2099-01-01T10:00:00.000Z",
+        "--prompt",
+        "hello",
+      ],
+      {
+        socketPath: "/tmp/ambrogio.sock",
+        env: {},
+        sendRpc: async () => ({ ok: true, result: {} }),
+        stdout: () => {},
+        stderr: (line) => err.push(line),
+      },
+    );
+
+    expect(code).toBe(2);
+    expect(err.some((line) => line.includes("TELEGRAM_ALLOWED_USER_ID"))).toBe(true);
   });
 
   test("telegram send-photo forwards path and prints human output", async () => {
@@ -148,6 +212,24 @@ describe("ambrogioctl", () => {
     expect(calls).toEqual([{ op: "telegram.sendPhoto", args: { path: "/data/pic.png" } }]);
     expect(out[0]).toContain("method: sendPhoto");
     expect(out[0]).toContain("telegramMessageId: 42");
+  });
+
+  test("telegram send-message supports positional text", async () => {
+    const calls: RecordedCall[] = [];
+    const out: string[] = [];
+    const code = await runAmbrogioCtl(["telegram", "send-message", "ciao", "mondo"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendRpc: async (op, args) => {
+        calls.push({ op, args });
+        return { ok: true, result: { ok: true } };
+      },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ op: "telegram.sendMessage", args: { text: "ciao mondo" } }]);
+    expect(out[0]).toContain("Message sent successfully.");
   });
 
   test("telegram send-document supports json output", async () => {
