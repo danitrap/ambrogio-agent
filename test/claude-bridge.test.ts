@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   extractClaudeAuditActions,
   extractClaudeToolCallActionsFromEvent,
-  splitTopLevelJsonArrayObjects,
+  splitJsonLines,
 } from "../src/model/claude-bridge";
 
 describe("extractClaudeAuditActions", () => {
@@ -115,18 +115,25 @@ describe("extractClaudeToolCallActionsFromEvent", () => {
   });
 });
 
-describe("splitTopLevelJsonArrayObjects", () => {
-  test("extracts complete objects from streaming array chunks", () => {
-    const firstChunk = '[{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/data/g';
-    const secondChunk = 'roceries.md"}}]}},{"type":"result","result":"ok"}]';
+describe("splitJsonLines", () => {
+  test("extracts complete json lines and keeps incomplete tail", () => {
+    const chunk = [
+      '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}',
+      '{"type":"user","message":{"content":[{"type":"tool_result"}]}}',
+      '{"type":"result","result":"o',
+    ].join("\n");
 
-    const first = splitTopLevelJsonArrayObjects(firstChunk);
-    expect(first.objects).toHaveLength(0);
+    const parsed = splitJsonLines(chunk);
+    expect(parsed.lines).toHaveLength(2);
+    expect(parsed.lines[0]).toContain('"type":"assistant"');
+    expect(parsed.lines[1]).toContain('"type":"user"');
+    expect(parsed.remaining).toContain('"type":"result"');
+  });
 
-    const second = splitTopLevelJsonArrayObjects(first.remaining + secondChunk);
-    expect(second.objects).toHaveLength(2);
-    expect(second.remaining.trim()).toBe("");
-    expect(second.objects[0]).toContain('"type":"assistant"');
-    expect(second.objects[1]).toContain('"type":"result"');
+  test("handles complete trailing newline", () => {
+    const chunk = '{"type":"result","result":"ok"}\n';
+    const parsed = splitJsonLines(chunk);
+    expect(parsed.lines).toEqual(['{"type":"result","result":"ok"}']);
+    expect(parsed.remaining).toBe("");
   });
 });
