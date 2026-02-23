@@ -38,6 +38,43 @@ describe("ambrogioctl", () => {
     expect(err.some(line => line.includes("--id"))).toBe(true);
   });
 
+  test("jobs list human-readable output includes mute status", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+
+    const code = await runAmbrogioCtl(["jobs", "list", "--limit", "5"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendRpc: async () => ({
+        ok: true,
+        result: {
+          tasks: [
+            {
+              taskId: "dl-1",
+              kind: "delayed",
+              status: "scheduled",
+              runAt: "2099-01-01T10:00:00.000Z",
+              mutedUntil: "2099-01-02T10:00:00.000Z",
+            },
+            {
+              taskId: "dl-2",
+              kind: "delayed",
+              status: "scheduled",
+              runAt: "2099-01-01T12:00:00.000Z",
+              mutedUntil: null,
+            },
+          ],
+        },
+      }),
+      stdout: (line) => out.push(line),
+      stderr: (line) => err.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(out[0]).toContain("dl-1 | delayed | scheduled | runAt=2099-01-01T10:00:00.000Z | mutedUntil=2099-01-02T10:00:00.000Z");
+    expect(out[0]).toContain("dl-2 | delayed | scheduled | runAt=2099-01-01T12:00:00.000Z | unmuted");
+    expect(err).toEqual([]);
+  });
+
   test("maps rpc not found errors to exit code 3", async () => {
     const err: string[] = [];
     const code = await runAmbrogioCtl(["jobs", "cancel", "--id", "missing"], {

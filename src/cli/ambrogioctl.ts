@@ -105,13 +105,36 @@ async function defaultSendRpc(socketPath: string, op: string, args: Record<strin
 }
 
 function formatResult(op: string, result: unknown): string {
+  const nowMs = Date.now();
+  const formatMute = (mutedUntil: string | null | undefined): string => {
+    if (!mutedUntil) {
+      return "unmuted";
+    }
+    const mutedUntilMs = Date.parse(mutedUntil);
+    if (Number.isNaN(mutedUntilMs)) {
+      return `mutedUntil=${mutedUntil}`;
+    }
+    if (mutedUntilMs > nowMs) {
+      return `mutedUntil=${mutedUntil}`;
+    }
+    return `muteExpiredAt=${mutedUntil}`;
+  };
+
   // Support both old tasks.list and new jobs.list
   if (op === "tasks.list" || op === "jobs.list") {
-    const jobs = (result as { tasks?: Array<{ taskId: string; status: string; kind?: string; runAt?: string | null }> }).tasks ?? [];
+    const jobs = (result as { tasks?: Array<{
+      taskId: string;
+      status: string;
+      kind?: string;
+      runAt?: string | null;
+      mutedUntil?: string | null;
+    }> }).tasks ?? [];
     if (jobs.length === 0) {
       return "No jobs.";
     }
-    return jobs.map((job) => `${job.taskId} | ${job.kind ?? "job"} | ${job.status}${job.runAt ? ` | runAt=${job.runAt}` : ""}`).join("\n");
+    return jobs
+      .map((job) => `${job.taskId} | ${job.kind ?? "job"} | ${job.status}${job.runAt ? ` | runAt=${job.runAt}` : ""} | ${formatMute(job.mutedUntil)}`)
+      .join("\n");
   }
   if (op === "jobs.list-recurring") {
     const jobs = (result as { jobs?: Array<{
@@ -124,6 +147,7 @@ function formatResult(op: string, result: unknown): string {
       recurrenceEnabled: boolean;
       nextRunAt: string | null;
       requestPreview: string;
+      mutedUntil?: string | null;
     }> }).jobs ?? [];
     if (jobs.length === 0) {
       return "No recurring jobs.";
@@ -131,7 +155,7 @@ function formatResult(op: string, result: unknown): string {
     return jobs.map((job) => {
       const enabled = job.recurrenceEnabled ? "enabled" : "paused";
       const runs = job.recurrenceMaxRuns ? `${job.recurrenceRunCount}/${job.recurrenceMaxRuns}` : `${job.recurrenceRunCount}`;
-      return `${job.taskId} | ${job.recurrenceExpression} | ${enabled} | runs: ${runs} | next: ${job.nextRunAt} | ${job.requestPreview.slice(0, 60)}`;
+      return `${job.taskId} | ${job.recurrenceExpression} | ${enabled} | runs: ${runs} | next: ${job.nextRunAt} | ${formatMute(job.mutedUntil)} | ${job.requestPreview.slice(0, 60)}`;
     }).join("\n");
   }
   if (op === "jobs.mute") {

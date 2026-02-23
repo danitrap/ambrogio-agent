@@ -679,7 +679,11 @@ async function main(): Promise<void> {
     }
   };
 
-  const runHeartbeatPromptWithTimeout = async (prompt: string, requestId: string): Promise<string> => {
+  const runHeartbeatPromptWithTimeout = async (
+    prompt: string,
+    requestId: string,
+    suppressToolCallUpdates: boolean,
+  ): Promise<string> => {
     const controller = new AbortController();
     const result = await withTimeout(
       (async () => {
@@ -687,7 +691,7 @@ async function main(): Promise<void> {
           requestId,
           message: prompt,
           signal: controller.signal,
-          onToolCallEvent: notifyToolCallUpdate,
+          onToolCallEvent: suppressToolCallUpdates ? undefined : notifyToolCallUpdate,
         });
       })(),
       MODEL_TIMEOUT_MS,

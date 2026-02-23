@@ -116,4 +116,22 @@ describe("createHeartbeatRunner", () => {
     expect(result.status).toBe("error");
     expect(runner.getHeartbeatState().heartbeatLastResult).toBe("error");
   });
+
+  test("suppresses tool call updates during heartbeat execution", async () => {
+    let suppressToolCallUpdates: boolean | null = null;
+    const runner = createHeartbeatRunner({
+      logger: createLoggerStub(),
+      stateStore: createStateStoreStub(),
+      runHeartbeatPromptWithTimeout: async (_prompt, _requestId, suppress) => {
+        suppressToolCallUpdates = suppress;
+        return "Skill executed";
+      },
+      quietHours: null,
+    });
+
+    const result = await runner.runScheduledHeartbeat("manual");
+
+    expect(result.status).toBe("completed");
+    expect(suppressToolCallUpdates === true).toBe(true);
+  });
 });

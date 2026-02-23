@@ -46,6 +46,7 @@ export function ensureHeadlessScheduledPrompt(prompt: string): string {
     "",
     HEADLESS_SCHEDULED_MARKER,
     "Questo job schedulato gira senza chat interattiva.",
+    "Se il job e mutato (`mutedUntil` nel futuro), il runtime lo salta prima di eseguire questo prompt.",
     "Se vuoi notificare l'utente DEVI usare il tool Telegram (es. ambrogioctl telegram send-message --text \"...\").",
     "Il runtime NON invia mai risposte implicite per questo job.",
     "Non aggiungere testo finale: usa solo tool (ambrogioctl) se devi notificare.",

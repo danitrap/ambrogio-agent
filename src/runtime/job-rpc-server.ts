@@ -167,6 +167,7 @@ async function handleRequest(request: RpcRequest, options: JobRpcServerOptions):
       createdAt: job.createdAt,
       runAt: job.runAt,
       requestPreview: job.requestPreview,
+      mutedUntil: job.mutedUntil,
     }));
     return rpcOk({ tasks: jobs }); // Keep "tasks" key for backwards compatibility
   }
@@ -352,6 +353,7 @@ async function handleRequest(request: RpcRequest, options: JobRpcServerOptions):
       nextRunAt: job.runAt,
       createdAt: job.createdAt,
       requestPreview: job.requestPreview,
+      mutedUntil: job.mutedUntil,
     }));
 
     return rpcOk({ jobs });

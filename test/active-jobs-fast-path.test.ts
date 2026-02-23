@@ -54,14 +54,22 @@ describe("active-jobs-fast-path", () => {
         runAt: null,
         requestPreview: "Long operation",
       }),
+      createJob({
+        taskId: "job-muted",
+        runAt: "2026-02-24T06:00:00.000Z",
+        mutedUntil: "2099-01-01T00:00:00.000Z",
+      }),
     ];
 
     const reply = buildActiveJobsFastReply(jobs);
 
-    expect(reply).toContain("Job attivi: 3");
+    expect(reply).toContain("Job attivi: 4");
     expect(reply).toContain("job-a");
     expect(reply).toContain("job-b");
     expect(reply).toContain("job-running");
+    expect(reply).toContain("job-muted");
+    expect(reply).toContain("mutedUntil=2099-01-01T00:00:00.000Z");
+    expect(reply).toContain("unmuted");
   });
 
   test("handles empty active jobs list", () => {

@@ -151,7 +151,7 @@ export function renderDashboardHtml(): string {
         <article class="card">
           <strong>\${new Date(job.runAt).toLocaleString()}</strong>
           <div>\${asText(job.requestPreview)}</div>
-          <div class="muted">\${asText(job.kind)} | \${asText(job.status)}\${job.recurrenceExpression ? " | " + asText(job.recurrenceExpression) : ""}</div>
+          <div class="muted">\${asText(job.kind)} | \${asText(job.status)}\${job.recurrenceExpression ? " | " + asText(job.recurrenceExpression) : ""}\${job.mutedUntil ? " | mutedUntil=" + asText(job.mutedUntil) : " | unmuted"}</div>
         </article>
       \`).join("");
     }

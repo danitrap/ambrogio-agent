@@ -17,6 +17,9 @@ description: Manage Ambrogio runtime jobs (background, delayed, recurring, muted
 - Never output raw JSON to user.
 - Never pass `--user-id` or `--chat-id` for jobs create operations. `ambrogioctl` must infer both from `TELEGRAM_ALLOWED_USER_ID`.
 - If TODO vs runtime job is ambiguous, ask explicit confirmation.
+- Always surface mute state in job summaries:
+  - include `mutedUntil=<ISO>` when mute is active,
+  - include `unmuted` otherwise.
 
 ## Intent-to-Command Map
 - List jobs: `ambrogioctl jobs list --json`
@@ -41,6 +44,16 @@ When creating delayed/recurring jobs, `--prompt` must be delivery-ready text, no
 ## Time Handling
 - Convert natural language time to absolute ISO.
 - If missing/ambiguous time, ask one concise clarification.
+
+## Mute Behavior (Critical)
+- `mute` sets `mutedUntil` on the job; it does NOT pause or delete the job.
+- While `mutedUntil` is in the future, runtime skips execution/delivery for that job.
+- For recurring jobs, schedule continues and next run is recalculated as usual.
+- For one-shot/delayed jobs, a muted due run is marked as skipped (`skipped_muted`).
+- When `mutedUntil` expires, the job is considered unmuted automatically.
+- To inspect mute state:
+  - use `ambrogioctl jobs list --json` or `ambrogioctl jobs list-recurring --json` and read `mutedUntil`,
+  - use `ambrogioctl jobs list-muted --json` for active mutes only.
 
 ## Output Contract
 - Confirm operation result in plain language.

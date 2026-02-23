@@ -16,7 +16,11 @@ export function createHeartbeatRunner(params: {
     getRuntimeValue: (key: string) => string | null;
     setRuntimeValue: (key: string, value: string) => void;
   };
-  runHeartbeatPromptWithTimeout: (prompt: string, requestId: string) => Promise<string>;
+  runHeartbeatPromptWithTimeout: (
+    prompt: string,
+    requestId: string,
+    suppressToolCallUpdates: boolean
+  ) => Promise<string>;
   quietHours: QuietHoursWindow | null;
 }) {
   let heartbeatInFlight = false;
@@ -51,7 +55,7 @@ export function createHeartbeatRunner(params: {
       const cycleResult = await runHeartbeatCycle({
         logger: params.logger,
         runHeartbeatPrompt: async ({ prompt, requestId: cycleRequestId }) =>
-          params.runHeartbeatPromptWithTimeout(prompt, cycleRequestId),
+          params.runHeartbeatPromptWithTimeout(prompt, cycleRequestId, true),
         requestId,
       });
 

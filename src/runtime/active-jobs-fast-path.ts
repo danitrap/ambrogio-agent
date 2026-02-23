@@ -79,8 +79,19 @@ export function buildActiveJobsFastReply(jobs: JobEntry[]): string {
   ];
 
   for (const [index, job] of sorted.entries()) {
+    let muteInfo = "unmuted";
+    if (job.mutedUntil) {
+      const mutedUntilMs = Date.parse(job.mutedUntil);
+      if (Number.isNaN(mutedUntilMs)) {
+        muteInfo = `mutedUntil=${job.mutedUntil}`;
+      } else if (mutedUntilMs > Date.now()) {
+        muteInfo = `mutedUntil=${job.mutedUntil}`;
+      } else {
+        muteInfo = `muteExpiredAt=${job.mutedUntil}`;
+      }
+    }
     lines.push(
-      `${index + 1}. ${job.taskId} | ${job.kind} | ${statusLabel(job.status)} | runAt=${formatWhen(job.runAt)}`,
+      `${index + 1}. ${job.taskId} | ${job.kind} | ${statusLabel(job.status)} | runAt=${formatWhen(job.runAt)} | ${muteInfo}`,
     );
   }
 
