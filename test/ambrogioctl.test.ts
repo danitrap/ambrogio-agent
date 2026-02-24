@@ -125,6 +125,181 @@ describe("ambrogioctl", () => {
     expect(out[0]).toContain("handledMessages: 10");
   });
 
+  test("mac ping prints concise output", async () => {
+    const out: string[] = [];
+    const calls: Array<{ method: string; payload?: Record<string, unknown> }> = [];
+    const code = await runAmbrogioCtl(["mac", "ping"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendMacRpc: async (method, payload) => {
+        calls.push({ method, payload });
+        return {
+          jsonrpc: "2.0",
+          id: "1",
+          result: { ok: true, service: "mac-tools-service", version: "1.0.0" },
+        };
+      },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ method: "system.ping", payload: undefined }]);
+    expect(out[0]).toBe("mac-tools-service 1.0.0");
+  });
+
+  test("mac calendar upcoming validates arguments", async () => {
+    const err: string[] = [];
+    const code = await runAmbrogioCtl(["mac", "calendar", "upcoming", "--days", "0"], {
+      socketPath: "/tmp/ambrogio.sock",
+      stdout: () => {},
+      stderr: (line) => err.push(line),
+    });
+    expect(code).toBe(2);
+    expect(err[0]).toContain("--days must be a positive integer.");
+  });
+
+  test("mac reminders open validates include-no-due-date", async () => {
+    const err: string[] = [];
+    const code = await runAmbrogioCtl(["mac", "reminders", "open", "--include-no-due-date", "maybe"], {
+      socketPath: "/tmp/ambrogio.sock",
+      stdout: () => {},
+      stderr: (line) => err.push(line),
+    });
+    expect(code).toBe(2);
+    expect(err[0]).toContain("must be true or false");
+  });
+
+  test("mac reminders open emits json when requested", async () => {
+    const out: string[] = [];
+    const calls: Array<{ method: string; payload?: Record<string, unknown> }> = [];
+    const code = await runAmbrogioCtl(["mac", "reminders", "open", "--limit", "5", "--json"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendMacRpc: async (method, payload) => {
+        calls.push({ method, payload });
+        return {
+          jsonrpc: "2.0",
+          id: "1",
+          result: {
+            generatedAt: "2026-02-23T10:00:00.000Z",
+            items: [{ id: "r1", title: "x", dueAt: null, listName: "Inbox", isFlagged: false, tags: ["@next"] }],
+            count: 1,
+          },
+        };
+      },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ method: "reminders.open", payload: { limit: 5 } }]);
+    expect(JSON.parse(out[0] ?? "")).toMatchObject({ count: 1 });
+  });
+
+  test("mac reminders open renders relative due status in text mode", async () => {
+    const out: string[] = [];
+    const code = await runAmbrogioCtl(["mac", "reminders", "open", "--limit", "5"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendMacRpc: async () => ({
+        jsonrpc: "2.0",
+        id: "1",
+        result: {
+          generatedAt: "2026-02-23T10:00:00.000Z",
+          generatedAtEpochMs: Date.parse("2026-02-23T10:00:00.000Z"),
+          timezone: "Europe/Rome",
+          items: [
+            {
+              id: "r1",
+              title: "Soon",
+              dueAt: "2026-02-23T11:00:00.000Z",
+              dueInMinutes: 60,
+              dueAtEpochMs: Date.parse("2026-02-23T11:00:00.000Z"),
+              isOverdue: false,
+              listName: "Inbox",
+              isFlagged: false,
+              tags: [],
+            },
+            {
+              id: "r2",
+              title: "Late",
+              dueAt: "2026-02-23T09:50:00.000Z",
+              dueInMinutes: -10,
+              dueAtEpochMs: Date.parse("2026-02-23T09:50:00.000Z"),
+              isOverdue: true,
+              listName: "Inbox",
+              isFlagged: true,
+              tags: ["@next"],
+            },
+          ],
+          count: 2,
+        },
+      }),
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(out.join("\n")).toContain("in 60m");
+    expect(out.join("\n")).toContain("overdue 10m");
+  });
+
+  test("mac calendar upcoming renders relative start status in text mode", async () => {
+    const out: string[] = [];
+    const code = await runAmbrogioCtl(["mac", "calendar", "upcoming", "--days", "1"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendMacRpc: async () => ({
+        jsonrpc: "2.0",
+        id: "1",
+        result: {
+          generatedAtEpochMs: Date.parse("2026-02-23T10:00:00.000Z"),
+          window: {
+            from: "2026-02-23T10:00:00.000Z",
+            to: "2026-02-24T10:00:00.000Z",
+            timezone: "Europe/Rome",
+          },
+          events: [
+            {
+              id: "e1",
+              title: "Future",
+              startAt: "2026-02-23T10:30:00.000Z",
+              endAt: "2026-02-23T11:30:00.000Z",
+              startAtEpochMs: Date.parse("2026-02-23T10:30:00.000Z"),
+              endAtEpochMs: Date.parse("2026-02-23T11:30:00.000Z"),
+              startInMinutes: 30,
+              endInMinutes: 90,
+              isStarted: false,
+              isEnded: false,
+              isOngoing: false,
+              calendarName: "Work",
+              allDay: false,
+            },
+            {
+              id: "e2",
+              title: "Live",
+              startAt: "2026-02-23T09:45:00.000Z",
+              endAt: "2026-02-23T10:15:00.000Z",
+              startAtEpochMs: Date.parse("2026-02-23T09:45:00.000Z"),
+              endAtEpochMs: Date.parse("2026-02-23T10:15:00.000Z"),
+              startInMinutes: -15,
+              endInMinutes: 15,
+              isStarted: true,
+              isEnded: false,
+              isOngoing: true,
+              calendarName: "Work",
+              allDay: false,
+            },
+          ],
+          count: 2,
+        },
+      }),
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(out.join("\n")).toContain("starts in 30m");
+    expect(out.join("\n")).toContain("ongoing");
+  });
+
   test("jobs create resolves user/chat from TELEGRAM_ALLOWED_USER_ID", async () => {
     const calls: RecordedCall[] = [];
     const code = await runAmbrogioCtl(

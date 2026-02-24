@@ -18,12 +18,25 @@ description: Periodic autonomous runtime check that decides whether to stay sile
 - `/data/HEARTBEAT.md` (policy first)
 - `ambrogioctl status --json`
 - `/data/TODO.md` (if present)
+- `ambrogioctl mac calendar upcoming --days 1 --json` (next 24h events)
+- `ambrogioctl mac reminders open --include-no-due-date false --json` (reminders with due date)
 - optional runtime/job/conversation info as needed
 
 ## Workflow
 1. Read `/data/HEARTBEAT.md` first.
-2. Collect runtime health + activity context.
-3. Evaluate policy thresholds and unresolved items.
+2. Collect runtime health + activity context:
+   - `ambrogioctl status --json`
+   - `ambrogioctl mac calendar upcoming --days 1 --json`
+   - `ambrogioctl mac reminders open --include-no-due-date false --json`
+3. Evaluate:
+   - Runtime/job health (critical/warning)
+   - TODO.md backlog state
+   - Calendar events in the next 2h → warning; next 30min → critical
+   - Reminders due today or overdue → warning; due in 30min → critical
+   - Use numeric relative fields from JSON:
+     - calendar: `startInMinutes`, `isOngoing`, `isEnded`
+     - reminders: `dueInMinutes`, `isOverdue`
+   - Do not classify urgency by parsing `startAt` or `dueAt` strings.
 4. Execute exactly one outcome:
 - no-op (silent)
 - send check-in

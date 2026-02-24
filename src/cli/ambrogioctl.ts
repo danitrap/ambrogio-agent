@@ -1,5 +1,7 @@
 import { createConnection } from "node:net";
 import { discoverSyncSkills, executeGenerator, type SyncSkill } from "./sync-manifest";
+import { callMacToolsRpc } from "../mac-tools/rpc-client";
+import type { RpcResponse as MacRpcResponse } from "../mac-tools/types";
 
 type RpcError = { code: string; message: string };
 type RpcResponse = { ok: true; result: unknown } | { ok: false; error: RpcError };
@@ -7,6 +9,7 @@ type RpcResponse = { ok: true; result: unknown } | { ok: false; error: RpcError 
 type RunDeps = {
   socketPath: string;
   sendRpc?: (op: string, args: Record<string, unknown>) => Promise<RpcResponse>;
+  sendMacRpc?: (method: string, payload?: Record<string, unknown>) => Promise<MacRpcResponse>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
   env?: Record<string, string>;
@@ -58,6 +61,15 @@ function resolveAuthorizedTelegramIds(args: string[], deps: RunDeps, stderr: (li
 }
 
 function mapErrorCodeToExit(code: string): number {
+  if (code === "method_not_found") {
+    return 3;
+  }
+  if (code === "invalid_params") {
+    return 2;
+  }
+  if (code === "permission_denied" || code === "timeout" || code === "internal_error") {
+    return 4;
+  }
   if (code === "NOT_FOUND") {
     return 3;
   }
@@ -68,6 +80,33 @@ function mapErrorCodeToExit(code: string): number {
     return 2;
   }
   return 10;
+}
+
+function formatRelativeMinutes(value: number): string {
+  if (value >= 0) {
+    return `in ${value}m`;
+  }
+  return `overdue ${Math.abs(value)}m`;
+}
+
+function formatCalendarStatus(event: {
+  isOngoing?: boolean;
+  isEnded?: boolean;
+  startInMinutes?: number;
+}): string {
+  if (event.isOngoing) {
+    return "ongoing";
+  }
+  if (event.isEnded) {
+    return "ended";
+  }
+  if (typeof event.startInMinutes === "number") {
+    if (event.startInMinutes >= 0) {
+      return `starts in ${event.startInMinutes}m`;
+    }
+    return `started ${Math.abs(event.startInMinutes)}m ago`;
+  }
+  return "unknown";
 }
 
 async function defaultSendRpc(socketPath: string, op: string, args: Record<string, unknown>): Promise<RpcResponse> {
@@ -314,6 +353,201 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
       stderr(message);
       return 10;
     }
+  }
+
+  if (scope === "mac") {
+    if (!action) {
+      stderr("Usage: ambrogioctl mac <ping|info|calendar|reminders> [options]");
+      return 2;
+    }
+
+    const json = hasFlag(args, "--json");
+    const socketPath = getEnvValue(deps, "AMBROGIO_MAC_TOOLS_SOCKET_PATH") ?? "/tmp/ambrogio-mac-tools.sock";
+    const sendMacRpc = deps.sendMacRpc
+      ?? ((method: string, payload?: Record<string, unknown>) => callMacToolsRpc({
+        socketPath,
+        method,
+        payload,
+        requestId: `ctl-${Date.now()}`,
+      }));
+    const call = async (
+      method: string,
+      payload: Record<string, unknown> | undefined,
+    ): Promise<number> => {
+      try {
+        const response = await sendMacRpc(method, payload);
+        if ("error" in response) {
+          stderr(response.error.message);
+          return mapErrorCodeToExit(response.error.code);
+        }
+        if (json) {
+          stdout(JSON.stringify(response.result));
+          return 0;
+        }
+        if (method === "system.ping") {
+          const result = response.result as { service: string; version: string };
+          stdout(`${result.service} ${result.version}`);
+          return 0;
+        }
+        if (method === "system.info") {
+          const info = response.result as {
+            service: string;
+            version: string;
+            uptimeMs: number;
+            socketPath: string;
+            permissions: { calendar: string; reminders: string };
+          };
+          stdout([
+            `service: ${info.service}`,
+            `version: ${info.version}`,
+            `uptimeMs: ${info.uptimeMs}`,
+            `socketPath: ${info.socketPath}`,
+            `calendarPermission: ${info.permissions.calendar}`,
+            `remindersPermission: ${info.permissions.reminders}`,
+          ].join("\n"));
+          return 0;
+        }
+        if (method === "calendar.upcoming") {
+          const result = response.result as {
+            generatedAtEpochMs?: number;
+            window: { from: string; to: string; timezone: string };
+            events: Array<{
+              title: string;
+              startAt: string;
+              endAt: string;
+              calendarName: string;
+              startInMinutes?: number;
+              isOngoing?: boolean;
+              isEnded?: boolean;
+            }>;
+            count: number;
+          };
+          if (result.events.length === 0) {
+            stdout(`No events in ${result.window.timezone} window.`);
+            return 0;
+          }
+          const lines = [
+            `window: ${result.window.from} -> ${result.window.to} (${result.window.timezone})`,
+            `count: ${result.count}`,
+            ...result.events.map((event) => {
+              const status = formatCalendarStatus(event);
+              return `${event.startAt} | ${event.title} | ${event.calendarName} | ${status}`;
+            }),
+          ];
+          stdout(lines.join("\n"));
+          return 0;
+        }
+        if (method === "reminders.open") {
+          const result = response.result as {
+            generatedAt: string;
+            generatedAtEpochMs?: number;
+            timezone?: string;
+            items: Array<{
+              title: string;
+              dueAt: string | null;
+              dueInMinutes?: number | null;
+              listName: string;
+              isFlagged: boolean;
+              tags: string[];
+            }>;
+            count: number;
+          };
+          if (result.items.length === 0) {
+            stdout(`No open reminders (${result.generatedAt}).`);
+            return 0;
+          }
+          const lines = [
+            `generatedAt: ${result.generatedAt}`,
+            `count: ${result.count}`,
+            ...result.items.map((item) => {
+              const due = item.dueAt ?? "no-due-date";
+              const relative = typeof item.dueInMinutes === "number" ? ` (${formatRelativeMinutes(item.dueInMinutes)})` : "";
+              const flagged = item.isFlagged ? "flagged" : "normal";
+              const tags = item.tags.length > 0 ? ` tags=${item.tags.join(",")}` : "";
+              return `${due}${relative} | ${item.title} | ${item.listName} | ${flagged}${tags}`;
+            }),
+          ];
+          stdout(lines.join("\n"));
+          return 0;
+        }
+        stdout(JSON.stringify(response.result, null, 2));
+        return 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr(message);
+        return 10;
+      }
+    };
+
+    if (action === "ping") {
+      return await call("system.ping", undefined);
+    }
+    if (action === "info") {
+      return await call("system.info", undefined);
+    }
+    if (action === "calendar") {
+      const sub = args[0];
+      const subArgs = args.slice(1);
+      if (sub !== "upcoming") {
+        stderr("Usage: ambrogioctl mac calendar upcoming [--days N --limit N --timezone TZ --json]");
+        return 2;
+      }
+      const daysRaw = readFlag(subArgs, "--days");
+      const limitRaw = readFlag(subArgs, "--limit");
+      const timezone = readFlag(subArgs, "--timezone") ?? undefined;
+      const payload: Record<string, unknown> = {};
+      if (daysRaw) {
+        const days = Number(daysRaw);
+        if (Number.isNaN(days) || !Number.isInteger(days) || days <= 0) {
+          stderr("--days must be a positive integer.");
+          return 2;
+        }
+        payload.days = days;
+      }
+      if (limitRaw) {
+        const limit = Number(limitRaw);
+        if (Number.isNaN(limit) || !Number.isInteger(limit) || limit <= 0) {
+          stderr("--limit must be a positive integer.");
+          return 2;
+        }
+        payload.limit = limit;
+      }
+      if (timezone) {
+        payload.timezone = timezone;
+      }
+      return await call("calendar.upcoming", payload);
+    }
+    if (action === "reminders") {
+      const sub = args[0];
+      const subArgs = args.slice(1);
+      if (sub !== "open") {
+        stderr("Usage: ambrogioctl mac reminders open [--limit N --include-no-due-date true|false --json]");
+        return 2;
+      }
+      const limitRaw = readFlag(subArgs, "--limit");
+      const includeNoDueDateRaw = readFlag(subArgs, "--include-no-due-date");
+      const payload: Record<string, unknown> = {};
+      if (limitRaw) {
+        const limit = Number(limitRaw);
+        if (Number.isNaN(limit) || !Number.isInteger(limit) || limit <= 0) {
+          stderr("--limit must be a positive integer.");
+          return 2;
+        }
+        payload.limit = limit;
+      }
+      if (includeNoDueDateRaw !== null) {
+        const normalized = includeNoDueDateRaw.trim().toLowerCase();
+        if (!["true", "false"].includes(normalized)) {
+          stderr("--include-no-due-date must be true or false.");
+          return 2;
+        }
+        payload.includeNoDueDate = normalized === "true";
+      }
+      return await call("reminders.open", payload);
+    }
+
+    stderr(`Unknown mac action: ${action}`);
+    return 2;
   }
 
   if (scope === "state") {
