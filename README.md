@@ -47,6 +47,13 @@ cp .env.example .env
 - `HEARTBEAT_QUIET_HOURS` (default suggested: `22:00-06:00`, local timezone; suppresses only timer check-ins)
 - `TELEGRAM_INPUT_IDLE_MS` (default: `3000`, execute after this idle window)
 - `TELEGRAM_INPUT_BUFFER_ENABLED` (default: `true`, disable to process each non-command update immediately)
+- `HOST_UID` / `HOST_GID` (default: `1000/1000`, set to your host user id/group id when running containerized on macOS)
+- `MAC_TOOLS_ENABLED` (default: `false`; keep `false` in containerized setup and run mac-tools on host)
+- `AMBROGIO_MAC_TOOLS_SOCKET_PATH` (default: `/data/runtime/mac-tools.sock`)
+- `AMBROGIO_MAC_TOOLS_RPC_TRANSPORT` (`auto|unix|tcp`, default: `auto`)
+- `AMBROGIO_MAC_TOOLS_TCP_HOST` (container default: `host.docker.internal`)
+- `AMBROGIO_MAC_TOOLS_TCP_PORT` (default: `39223`)
+- `AMBROGIO_MAC_TOOLS_TCP_ENABLED` (host runner default: `true`)
 
 4. Start:
 ```bash
@@ -259,6 +266,53 @@ bun run ctl -- jobs update-recurrence --id <job-id> --expression "2h" --json
 bun run ctl -- telegram send-photo --path /data/path/to/image.png --json
 bun run ctl -- telegram send-audio --path /data/path/to/audio.mp3 --json
 bun run ctl -- telegram send-document --path /data/path/to/file.pdf --json
+```
+
+**macOS native tools (when `MAC_TOOLS_ENABLED=true`):**
+```bash
+bun run ctl -- mac ping --json
+bun run ctl -- mac info --json
+bun run ctl -- mac calendar upcoming --days 7 --limit 100 --timezone Europe/Rome --json
+bun run ctl -- mac reminders open --limit 200 --include-no-due-date true --json
+```
+
+TCC troubleshooting:
+- Open `System Settings > Privacy & Security > Calendars` and `Reminders`
+- Allow access for the process running Ambrogio (or your terminal)
+- Retry the `ambrogioctl mac ...` command
+
+### Container Agent + macOS Host Tools (recommended on Mac)
+
+When the agent runs in Docker, keep the macOS tools service on the host:
+
+1. Configure `.env`:
+```bash
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
+MAC_TOOLS_ENABLED=false
+AMBROGIO_MAC_TOOLS_SOCKET_PATH=/data/runtime/mac-tools.sock
+AMBROGIO_MAC_TOOLS_RPC_TRANSPORT=auto
+AMBROGIO_MAC_TOOLS_TCP_HOST=host.docker.internal
+AMBROGIO_MAC_TOOLS_TCP_PORT=39223
+AMBROGIO_MAC_TOOLS_TCP_ENABLED=true
+```
+
+2. Start mac-tools service on host (outside Docker):
+```bash
+mkdir -p data/runtime
+bun run mac-tools:host
+```
+The host runner exposes both Unix socket and TCP (default `0.0.0.0:39223`) for Docker fallback.
+
+3. Start/restart container:
+```bash
+docker compose up -d --build
+```
+
+4. Test from the containerized CLI:
+```bash
+bun run ctl -- mac ping
+bun run ctl -- mac info
 ```
 
 Example `HEARTBEAT.md`:

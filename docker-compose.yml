@@ -20,7 +20,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    user: "1000:1000"
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     env_file:
       - .env
     environment:
@@ -34,6 +34,9 @@ services:
       - LOG_LEVEL=info
       - TELEGRAM_POLL_TIMEOUT_SECONDS=20
       - DASHBOARD_HOST=0.0.0.0
+      - AMBROGIO_MAC_TOOLS_RPC_TRANSPORT=${AMBROGIO_MAC_TOOLS_RPC_TRANSPORT:-auto}
+      - AMBROGIO_MAC_TOOLS_TCP_HOST=${AMBROGIO_MAC_TOOLS_TCP_HOST:-host.docker.internal}
+      - AMBROGIO_MAC_TOOLS_TCP_PORT=${AMBROGIO_MAC_TOOLS_TCP_PORT:-39223}
     volumes:
       - ./data:/data:rw
     ports:

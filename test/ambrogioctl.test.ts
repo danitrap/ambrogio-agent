@@ -240,6 +240,9 @@ describe("ambrogioctl", () => {
     expect(code).toBe(0);
     expect(out.join("\n")).toContain("in 60m");
     expect(out.join("\n")).toContain("overdue 10m");
+    expect(out.join("\n")).toContain("generatedAt: 2026-02-23 11:00:00 (Europe/Rome)");
+    expect(out.join("\n")).toContain("2026-02-23 12:00:00 (Europe/Rome) (in 60m) | Soon");
+    expect(out.join("\n")).toContain("2026-02-23 10:50:00 (Europe/Rome) (overdue 10m) | Late");
   });
 
   test("mac calendar upcoming renders relative start status in text mode", async () => {

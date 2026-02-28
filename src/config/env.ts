@@ -36,6 +36,8 @@ export type AppConfig = {
   dashboardHost: string;
   dashboardPort: number;
   toolCallTelegramUpdatesEnabled: boolean;
+  macToolsEnabled: boolean;
+  macToolsSocketPath: string;
 };
 
 function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
@@ -95,5 +97,7 @@ export function loadConfig(): AppConfig {
     dashboardHost: Bun.env.DASHBOARD_HOST ?? "127.0.0.1",
     dashboardPort: parseNumber(Bun.env.DASHBOARD_PORT ?? "8787", "DASHBOARD_PORT"),
     toolCallTelegramUpdatesEnabled: parseBoolean(Bun.env.TOOL_CALL_TELEGRAM_UPDATES, false),
+    macToolsEnabled: parseBoolean(Bun.env.MAC_TOOLS_ENABLED, false),
+    macToolsSocketPath: Bun.env.AMBROGIO_MAC_TOOLS_SOCKET_PATH?.trim() || "/tmp/ambrogio-mac-tools.sock",
   };
 }

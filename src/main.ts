@@ -24,6 +24,7 @@ import {
 } from "./runtime/scheduled-job-headless";
 import { StateStore } from "./runtime/state-store";
 import { startJobRpcServer } from "./runtime/job-rpc-server";
+import { startMacToolsLifecycle } from "./runtime/mac-tools-lifecycle";
 import { createTelegramInputBuffer, type BufferedTelegramInput } from "./runtime/telegram-input-buffer";
 import { startTelegramUpdateLoop } from "./runtime/telegram-update-loop";
 import { parseOpenTodoItems } from "./runtime/todo-snapshot";
@@ -788,7 +789,7 @@ async function main(): Promise<void> {
   heartbeatStateResolver = heartbeatRunner.getHeartbeatState;
 
   const rpcSocketPath = (process.env.AMBROGIO_SOCKET_PATH ?? "").trim() || "/tmp/ambrogio-agent.sock";
-  await startJobRpcServer({
+  const jobRpcServer = await startJobRpcServer({
     socketPath: rpcSocketPath,
     stateStore,
     retryJobDelivery: async (jobId) => {
@@ -816,6 +817,47 @@ async function main(): Promise<void> {
     },
   });
   logger.info("job_rpc_server_started", { socketPath: rpcSocketPath });
+
+  const macToolsLifecycle = await startMacToolsLifecycle({
+    enabled: config.macToolsEnabled,
+    socketPath: config.macToolsSocketPath,
+    logger,
+  });
+  await macToolsLifecycle.runStartupHealthcheck();
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    logger.info("shutdown_started", { signal });
+    try {
+      await macToolsLifecycle.stop();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn("shutdown_mac_tools_failed", { message });
+    }
+    try {
+      await jobRpcServer.close();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn("shutdown_job_rpc_failed", { message });
+    }
+    try {
+      stateStore.close();
+    } catch {
+      // no-op
+    }
+    process.exit(0);
+  };
+
+  process.on("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
+  process.on("SIGTERM", () => {
+    void shutdown("SIGTERM");
+  });
 
   setInterval(() => {
     void (async () => {

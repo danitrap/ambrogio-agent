@@ -7,6 +7,7 @@
     "dev": "bun run src/main.ts",
     "start": "bun run src/main.ts",
     "ctl": "bun run src/cli/ambrogioctl.ts",
+    "mac-tools:host": "bun run src/mac-tools/host-main.ts",
     "typecheck": "bunx tsc --noEmit",
     "test": "bun test"
   },

@@ -89,6 +89,43 @@ function formatRelativeMinutes(value: number): string {
   return `overdue ${Math.abs(value)}m`;
 }
 
+function formatIsoInTimezone(iso: string, timezone?: string): string {
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) {
+    return iso;
+  }
+  if (!timezone) {
+    return iso;
+  }
+
+  try {
+    const formatter = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(date);
+    const byType = new Map(parts.map((part) => [part.type, part.value]));
+    const year = byType.get("year");
+    const month = byType.get("month");
+    const day = byType.get("day");
+    const hour = byType.get("hour");
+    const minute = byType.get("minute");
+    const second = byType.get("second");
+    if (!year || !month || !day || !hour || !minute || !second) {
+      return iso;
+    }
+    return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+  } catch {
+    return iso;
+  }
+}
+
 function formatCalendarStatus(event: {
   isOngoing?: boolean;
   isEnded?: boolean;
@@ -456,11 +493,19 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
             stdout(`No open reminders (${result.generatedAt}).`);
             return 0;
           }
+          const timezone = typeof result.timezone === "string" && result.timezone.trim().length > 0
+            ? result.timezone.trim()
+            : undefined;
+          const generatedAtLabel = timezone
+            ? `${formatIsoInTimezone(result.generatedAt, timezone)} (${timezone})`
+            : result.generatedAt;
           const lines = [
-            `generatedAt: ${result.generatedAt}`,
+            `generatedAt: ${generatedAtLabel}`,
             `count: ${result.count}`,
             ...result.items.map((item) => {
-              const due = item.dueAt ?? "no-due-date";
+              const due = item.dueAt
+                ? (timezone ? `${formatIsoInTimezone(item.dueAt, timezone)} (${timezone})` : item.dueAt)
+                : "no-due-date";
               const relative = typeof item.dueInMinutes === "number" ? ` (${formatRelativeMinutes(item.dueInMinutes)})` : "";
               const flagged = item.isFlagged ? "flagged" : "normal";
               const tags = item.tags.length > 0 ? ` tags=${item.tags.join(",")}` : "";
