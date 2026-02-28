@@ -30,6 +30,7 @@ describe("mac-tools-service routing", () => {
         notes: "details",
       }],
       getPermissionState: async () => "denied",
+      fetchReminderLists: async () => [{ id: "list-1", name: "Inbox" }],
       now: () => new Date("2026-02-23T10:00:00.000Z"),
     });
 
@@ -74,13 +75,25 @@ describe("mac-tools-service routing", () => {
     const remindersResult = reminders.result as {
       generatedAtEpochMs: number;
       timezone: string;
-      items: Array<{ tags: string[]; isFlagged: boolean; dueInMinutes: number | null }>;
+      items: Array<{ tags: string[]; isFlagged: boolean; dueInMinutes: number | null; notesFull: string | null }>;
     };
-    expect(remindersResult.items[0]?.tags).toEqual(["@next"]);
+    expect(remindersResult.items[0]?.tags).toEqual(["#next"]);
     expect(remindersResult.items[0]?.isFlagged).toBe(true);
     expect(remindersResult.items[0]?.dueInMinutes).toBe(1320);
+    expect(remindersResult.items[0]?.notesFull).toBe("details");
     expect(remindersResult.generatedAtEpochMs).toBe(Date.parse("2026-02-23T10:00:00.000Z"));
     expect(typeof remindersResult.timezone).toBe("string");
+
+    const reminderLists = await handleMacToolsRpcRequest({
+      request: { method: "reminders.lists", id: 5 },
+      ...context,
+    });
+    if (!("result" in reminderLists)) {
+      throw new Error("Expected reminder lists success response");
+    }
+    const reminderListsResult = reminderLists.result as { lists: Array<{ id: string; name: string }>; count: number };
+    expect(reminderListsResult.lists).toEqual([{ id: "list-1", name: "Inbox" }]);
+    expect(reminderListsResult.count).toBe(1);
   });
 
   test("returns method_not_found and standard errors", async () => {
@@ -119,5 +132,55 @@ describe("mac-tools-service routing", () => {
       remindersProvider: new RemindersProvider({ fetchOpenReminders: async () => [] }),
     });
     expect("error" in invalidParams && invalidParams.error.code).toBe("invalid_params");
+  });
+
+  test("supports reminders create and update routes", async () => {
+    const remindersProvider = new RemindersProvider({
+      now: () => new Date("2026-02-23T10:00:00.000Z"),
+      fetchOpenReminders: async () => [{
+        id: "rem-1",
+        listName: "Inbox",
+        title: "Call",
+        dueAt: "2026-02-24T08:00:00.000Z",
+        priority: 0,
+        isFlagged: false,
+        notes: "context",
+      }],
+      createReminder: async () => "created-1",
+      deleteReminder: async () => {},
+    });
+
+    const context = {
+      socketPath: "/tmp/test.sock",
+      startedAtMs: Date.now() - 500,
+      calendarProvider: new CalendarProvider({ fetchCalendarEvents: async () => [] }),
+      remindersProvider,
+    };
+
+    const created = await handleMacToolsRpcRequest({
+      request: {
+        method: "reminders.create",
+        id: 1,
+        params: { listName: "Inbox", title: "New item", statusTag: "#next", areaTag: "#personal" },
+      },
+      ...context,
+    });
+    expect("result" in created && created.result).toMatchObject({
+      id: "created-1",
+      tags: ["#next", "#personal"],
+    });
+
+    const updated = await handleMacToolsRpcRequest({
+      request: {
+        method: "reminders.update",
+        id: 2,
+        params: { id: "rem-1", statusTag: "#waiting" },
+      },
+      ...context,
+    });
+    expect("result" in updated && updated.result).toMatchObject({
+      id: "created-1",
+      tags: ["#waiting"],
+    });
   });
 });

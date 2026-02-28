@@ -70,6 +70,18 @@ export async function runEkctlJson(args: string[], timeoutMs: number): Promise<u
   }
 }
 
+export async function runEkctlCommand(args: string[], timeoutMs: number): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("ekctl", args, {
+      timeout: timeoutMs,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return stdout.trim();
+  } catch (error) {
+    mapEkctlExecutionError(error, timeoutMs);
+  }
+}
+
 export function mapEkctlExecutionError(error: unknown, timeoutMs: number): never {
   if (error && typeof error === "object" && "code" in error) {
     const code = String((error as { code?: unknown }).code ?? "");
@@ -118,6 +130,7 @@ type EkctlReminder = {
   isCompleted?: boolean;
   priority?: number;
   dueDate?: string;
+  completionDate?: string;
   notes?: string;
   list?: {
     id?: string;
@@ -169,6 +182,18 @@ export async function listEkctlRemindersByCalendar(params: {
     params.timeoutMs,
   ) as { reminders?: EkctlReminder[] };
   return Array.isArray(payload.reminders) ? payload.reminders : [];
+}
+
+export async function showEkctlReminder(reminderId: string, timeoutMs: number): Promise<EkctlReminder | null> {
+  const payload = await runEkctlJson(["show", "reminder", reminderId], timeoutMs) as { reminder?: EkctlReminder };
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  return payload.reminder ?? null;
+}
+
+export async function deleteEkctlReminder(reminderId: string, timeoutMs: number): Promise<void> {
+  await runEkctlCommand(["delete", "reminder", reminderId], timeoutMs);
 }
 
 export type {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   extractClaudeAuditActions,
+  extractLastClaudeAssistantText,
   extractClaudeToolCallActionsFromEvent,
   splitJsonLines,
 } from "../src/model/claude-bridge";
@@ -112,6 +113,49 @@ describe("extractClaudeToolCallActionsFromEvent", () => {
       message: { content: [{ type: "text", text: "hi" }] },
     });
     expect(actions).toHaveLength(0);
+  });
+});
+
+describe("extractLastClaudeAssistantText", () => {
+  test("returns the last assistant text block", () => {
+    const text = extractLastClaudeAssistantText([
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "First answer" },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", name: "TodoWrite", input: { todos: [] } },
+            { type: "text", text: "Final user-facing answer" },
+          ],
+        },
+      },
+      { type: "result", result: "" },
+    ]);
+
+    expect(text).toBe("Final user-facing answer");
+  });
+
+  test("returns empty string when assistant text is absent", () => {
+    const text = extractLastClaudeAssistantText([
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", name: "Read", input: { file_path: "/tmp/x" } },
+          ],
+        },
+      },
+      { type: "result", result: "" },
+    ]);
+
+    expect(text).toBe("");
   });
 });
 

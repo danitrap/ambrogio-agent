@@ -169,6 +169,54 @@ describe("ambrogioctl", () => {
     expect(err[0]).toContain("must be true or false");
   });
 
+  test("mac reminders lists emits json when requested", async () => {
+    const out: string[] = [];
+    const calls: Array<{ method: string; payload?: Record<string, unknown> }> = [];
+    const code = await runAmbrogioCtl(["mac", "reminders", "lists", "--json"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendMacRpc: async (method, payload) => {
+        calls.push({ method, payload });
+        return {
+          jsonrpc: "2.0",
+          id: "1",
+          result: {
+            generatedAt: "2026-02-23T10:00:00.000Z",
+            lists: [{ id: "list-1", name: "Inbox" }],
+            count: 1,
+          },
+        };
+      },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ method: "reminders.lists", payload: undefined }]);
+    expect(JSON.parse(out[0] ?? "")).toMatchObject({ count: 1 });
+  });
+
+  test("mac reminders lists renders text mode", async () => {
+    const out: string[] = [];
+    const code = await runAmbrogioCtl(["mac", "reminders", "lists"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendMacRpc: async () => ({
+        jsonrpc: "2.0",
+        id: "1",
+        result: {
+          generatedAt: "2026-02-23T10:00:00.000Z",
+          lists: [{ id: "list-1", name: "Inbox" }],
+          count: 1,
+        },
+      }),
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(out.join("\n")).toContain("generatedAt: 2026-02-23T10:00:00.000Z");
+    expect(out.join("\n")).toContain("Inbox | list-1");
+  });
+
   test("mac reminders open emits json when requested", async () => {
     const out: string[] = [];
     const calls: Array<{ method: string; payload?: Record<string, unknown> }> = [];
@@ -181,7 +229,15 @@ describe("ambrogioctl", () => {
           id: "1",
           result: {
             generatedAt: "2026-02-23T10:00:00.000Z",
-            items: [{ id: "r1", title: "x", dueAt: null, listName: "Inbox", isFlagged: false, tags: ["@next"] }],
+            items: [{
+              id: "r1",
+              title: "x",
+              dueAt: null,
+              listName: "Inbox",
+              isFlagged: false,
+              tags: ["#next"],
+              notesFull: "full body",
+            }],
             count: 1,
           },
         };
@@ -195,7 +251,7 @@ describe("ambrogioctl", () => {
     expect(JSON.parse(out[0] ?? "")).toMatchObject({ count: 1 });
   });
 
-  test("mac reminders open renders relative due status in text mode", async () => {
+  test("mac reminders open renders relative due status in text mode with full notes", async () => {
     const out: string[] = [];
     const code = await runAmbrogioCtl(["mac", "reminders", "open", "--limit", "5"], {
       socketPath: "/tmp/ambrogio.sock",
@@ -217,6 +273,7 @@ describe("ambrogioctl", () => {
               listName: "Inbox",
               isFlagged: false,
               tags: [],
+              notesFull: "soon note",
             },
             {
               id: "r2",
@@ -227,7 +284,8 @@ describe("ambrogioctl", () => {
               isOverdue: true,
               listName: "Inbox",
               isFlagged: true,
-              tags: ["@next"],
+              tags: ["#next"],
+              notesFull: "late note",
             },
           ],
           count: 2,
@@ -243,6 +301,98 @@ describe("ambrogioctl", () => {
     expect(out.join("\n")).toContain("generatedAt: 2026-02-23 11:00:00 (Europe/Rome)");
     expect(out.join("\n")).toContain("2026-02-23 12:00:00 (Europe/Rome) (in 60m) | Soon");
     expect(out.join("\n")).toContain("2026-02-23 10:50:00 (Europe/Rome) (overdue 10m) | Late");
+    expect(out.join("\n")).toContain("notes: soon note");
+    expect(out.join("\n")).toContain("notes: late note");
+  });
+
+  test("mac reminders open forwards tag/list/state filters", async () => {
+    const calls: Array<{ method: string; payload?: Record<string, unknown> }> = [];
+    const code = await runAmbrogioCtl(
+      ["mac", "reminders", "open", "--tag", "#next", "--list", "Inbox", "--state", "completed", "--days", "14", "--json"],
+      {
+        socketPath: "/tmp/ambrogio.sock",
+        sendMacRpc: async (method, payload) => {
+          calls.push({ method, payload });
+          return { jsonrpc: "2.0", id: "1", result: { generatedAt: "2026-02-23T10:00:00.000Z", items: [], count: 0 } };
+        },
+        stdout: () => {},
+        stderr: () => {},
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{
+      method: "reminders.open",
+      payload: { tag: "#next", listName: "Inbox", state: "completed", days: 14 },
+    }]);
+  });
+
+  test("mac reminders create forwards managed tags and notes", async () => {
+    const calls: Array<{ method: string; payload?: Record<string, unknown> }> = [];
+    const code = await runAmbrogioCtl(
+      [
+        "mac",
+        "reminders",
+        "create",
+        "--list",
+        "Inbox",
+        "--title",
+        "Call Gian Marco",
+        "--status-tag",
+        "#next",
+        "--area-tag",
+        "#personal",
+        "--tags",
+        "#calls,#errands",
+        "--notes",
+        "context",
+        "--json",
+      ],
+      {
+        socketPath: "/tmp/ambrogio.sock",
+        sendMacRpc: async (method, payload) => {
+          calls.push({ method, payload });
+          return { jsonrpc: "2.0", id: "1", result: { id: "r1", title: "x", listName: "Inbox", dueAt: null, tags: ["#next"] } };
+        },
+        stdout: () => {},
+        stderr: () => {},
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{
+      method: "reminders.create",
+      payload: {
+        listName: "Inbox",
+        title: "Call Gian Marco",
+        statusTag: "#next",
+        areaTag: "#personal",
+        otherTags: ["#calls", "#errands"],
+        notes: "context",
+      },
+    }]);
+  });
+
+  test("mac reminders update forwards null clears", async () => {
+    const calls: Array<{ method: string; payload?: Record<string, unknown> }> = [];
+    const code = await runAmbrogioCtl(
+      ["mac", "reminders", "update", "--id", "r1", "--due", "none", "--status-tag", "none", "--area-tag", "none", "--json"],
+      {
+        socketPath: "/tmp/ambrogio.sock",
+        sendMacRpc: async (method, payload) => {
+          calls.push({ method, payload });
+          return { jsonrpc: "2.0", id: "1", result: { id: "r1", title: "x", listName: "Inbox", dueAt: null, tags: [] } };
+        },
+        stdout: () => {},
+        stderr: () => {},
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{
+      method: "reminders.update",
+      payload: { id: "r1", dueAt: null, statusTag: null, areaTag: null },
+    }]);
   });
 
   test("mac calendar upcoming renders relative start status in text mode", async () => {

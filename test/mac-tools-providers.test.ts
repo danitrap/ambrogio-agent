@@ -120,7 +120,28 @@ describe("CalendarProvider", () => {
 });
 
 describe("RemindersProvider", () => {
-  test("extracts tags, sorts items and supports no-due-date behavior", async () => {
+  test("lists reminder lists from the provider", async () => {
+    const provider = new RemindersProvider({
+      now: () => new Date("2026-02-23T10:00:00.000Z"),
+      fetchReminderLists: async () => [
+        { id: "2", name: "Promemoria" },
+        { id: "1", name: "Inbox" },
+      ],
+    });
+
+    const result = await provider.getLists();
+    expect(result).toMatchObject({
+      generatedAt: "2026-02-23T10:00:00.000Z",
+      generatedAtEpochMs: Date.parse("2026-02-23T10:00:00.000Z"),
+      count: 2,
+    });
+    expect(result.lists).toEqual([
+      { id: "2", name: "Promemoria" },
+      { id: "1", name: "Inbox" },
+    ]);
+  });
+
+  test("extracts canonical tags, exposes notesFull, filters, and supports no-due-date behavior", async () => {
     const provider = new RemindersProvider({
       now: () => new Date("2026-02-23T10:00:00.000Z"),
       fetchOpenReminders: async () => [
@@ -154,7 +175,9 @@ describe("RemindersProvider", () => {
 
     const withNoDue = await provider.getOpen({ includeNoDueDate: true, limit: 10 });
     expect(withNoDue.items.map((item) => item.id)).toEqual(["b", "a", "c"]);
-    expect(withNoDue.items[1]?.tags).toEqual(["@calls", "@next"]);
+    expect(withNoDue.items[1]?.tags).toEqual(["#calls", "#next"]);
+    expect(withNoDue.items[1]?.statusTag).toBe("#next");
+    expect(withNoDue.items[1]?.notesFull).toBe("details @next");
     expect(typeof withNoDue.timezone).toBe("string");
     expect(withNoDue.timezone.length).toBeGreaterThan(0);
     expect(withNoDue.generatedAtEpochMs).toBe(Date.parse("2026-02-23T10:00:00.000Z"));
@@ -166,6 +189,12 @@ describe("RemindersProvider", () => {
 
     const withoutNoDue = await provider.getOpen({ includeNoDueDate: false, limit: 10 });
     expect(withoutNoDue.items.map((item) => item.id)).toEqual(["b", "a"]);
+
+    const filteredByTag = await provider.getOpen({ limit: 10, tag: "#next" });
+    expect(filteredByTag.items.map((item) => item.id)).toEqual(["a"]);
+
+    const filteredByList = await provider.getOpen({ limit: 10, listName: "someday" });
+    expect(filteredByList.items.map((item) => item.id)).toEqual(["c"]);
   });
 
   test("computes due-in and overdue reminder fields", async () => {
@@ -218,5 +247,71 @@ describe("RemindersProvider", () => {
       code: "permission_denied",
       data: { service: "reminders" },
     } satisfies Partial<MacToolsError>);
+  });
+
+  test("supports completed reminders with a default 7 day window", async () => {
+    const provider = new RemindersProvider({
+      now: () => new Date("2026-02-23T10:00:00.000Z"),
+      fetchOpenReminders: async ({ state }) => {
+        if (state === "completed") {
+          return [
+            {
+              id: "recent",
+              listName: "Inbox",
+              title: "Done #next",
+              dueAt: null,
+              completedAt: "2026-02-22T08:00:00.000Z",
+              priority: 0,
+              isFlagged: false,
+              notes: "finished",
+            },
+            {
+              id: "old",
+              listName: "Inbox",
+              title: "Old done",
+              dueAt: null,
+              completedAt: "2026-02-10T08:00:00.000Z",
+              priority: 0,
+              isFlagged: false,
+            },
+          ];
+        }
+        return [];
+      },
+    });
+
+    const result = await provider.getOpen({ state: "completed", limit: 10 });
+    expect(result.items.map((item) => item.id)).toEqual(["recent"]);
+    expect(result.items[0]).toMatchObject({
+      completedAt: "2026-02-22T08:00:00.000Z",
+      tags: ["#next"],
+      notesFull: "finished",
+    });
+  });
+
+  test("update replaces reminder and returns the replacement item", async () => {
+    const provider = new RemindersProvider({
+      now: () => new Date("2026-02-23T10:00:00.000Z"),
+      fetchOpenReminders: async () => [{
+        id: "old-id",
+        listName: "Inbox",
+        title: "Replace me",
+        dueAt: null,
+        priority: 0,
+        isFlagged: false,
+        notes: "context\n\nambrogio-tags: #next #personal",
+      }],
+      createReminder: async () => "new-id",
+      deleteReminder: async () => {},
+    });
+
+    const updated = await provider.update({ id: "old-id", statusTag: "#waiting", areaTag: "#home", otherTags: ["#smoke"] });
+    expect(updated).toMatchObject({
+      id: "new-id",
+      tags: ["#waiting", "#home", "#smoke"],
+      statusTag: "#waiting",
+      areaTag: "#home",
+      otherTags: ["#smoke"],
+    });
   });
 });

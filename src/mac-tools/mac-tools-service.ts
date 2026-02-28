@@ -5,6 +5,8 @@ import { CalendarProvider } from "./providers/calendar-provider";
 import { RemindersProvider } from "./providers/reminders-provider";
 import {
   MacToolsError,
+  type RemindersCreateParams,
+  type RemindersUpdateParams,
   type RpcError,
   type RpcId,
   type RpcRequest,
@@ -130,8 +132,23 @@ export async function handleMacToolsRpcRequest(params: {
       return buildSuccess(id, result);
     }
 
-    if (method === "reminders.open") {
-      const result = await params.remindersProvider.getOpen(params.request.params as Record<string, unknown> | undefined);
+	    if (method === "reminders.open") {
+	      const result = await params.remindersProvider.getOpen(params.request.params as Record<string, unknown> | undefined);
+	      return buildSuccess(id, result);
+	    }
+
+	    if (method === "reminders.lists") {
+	      const result = await params.remindersProvider.getLists();
+	      return buildSuccess(id, result);
+	    }
+
+	    if (method === "reminders.create") {
+      const result = await params.remindersProvider.create((params.request.params ?? {}) as RemindersCreateParams);
+      return buildSuccess(id, result);
+    }
+
+    if (method === "reminders.update") {
+      const result = await params.remindersProvider.update((params.request.params ?? {}) as RemindersUpdateParams);
       return buildSuccess(id, result);
     }
 

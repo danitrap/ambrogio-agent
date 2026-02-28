@@ -146,6 +146,25 @@ function formatCalendarStatus(event: {
   return "unknown";
 }
 
+function normalizeReminderTag(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.startsWith("@") ? `#${trimmed.slice(1)}` : trimmed;
+}
+
+function parseReminderTagCsv(value: string | null): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const tags = value
+    .split(",")
+    .map((tag) => normalizeReminderTag(tag))
+    .filter((tag) => tag.length > 0);
+  return tags.length > 0 ? tags : undefined;
+}
+
 async function defaultSendRpc(socketPath: string, op: string, args: Record<string, unknown>): Promise<RpcResponse> {
   return await new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
@@ -480,12 +499,15 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
             generatedAtEpochMs?: number;
             timezone?: string;
             items: Array<{
+              id?: string;
               title: string;
               dueAt: string | null;
               dueInMinutes?: number | null;
+              completedAt?: string | null;
               listName: string;
               isFlagged: boolean;
               tags: string[];
+              notesFull?: string | null;
             }>;
             count: number;
           };
@@ -502,16 +524,60 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
           const lines = [
             `generatedAt: ${generatedAtLabel}`,
             `count: ${result.count}`,
-            ...result.items.map((item) => {
-              const due = item.dueAt
-                ? (timezone ? `${formatIsoInTimezone(item.dueAt, timezone)} (${timezone})` : item.dueAt)
+            ...result.items.flatMap((item) => {
+              const dueBase = item.completedAt ?? item.dueAt;
+              const due = dueBase
+                ? (timezone ? `${formatIsoInTimezone(dueBase, timezone)} (${timezone})` : dueBase)
                 : "no-due-date";
               const relative = typeof item.dueInMinutes === "number" ? ` (${formatRelativeMinutes(item.dueInMinutes)})` : "";
               const flagged = item.isFlagged ? "flagged" : "normal";
               const tags = item.tags.length > 0 ? ` tags=${item.tags.join(",")}` : "";
-              return `${due}${relative} | ${item.title} | ${item.listName} | ${flagged}${tags}`;
+              const lines = [`${due}${relative} | ${item.title} | ${item.listName} | ${flagged}${tags}`];
+              if (item.notesFull && item.notesFull.trim().length > 0) {
+                lines.push(`notes: ${item.notesFull}`);
+              }
+              return lines;
             }),
           ];
+          stdout(lines.join("\n"));
+          return 0;
+        }
+        if (method === "reminders.lists") {
+          const result = response.result as {
+            generatedAt: string;
+            lists: Array<{ id: string; name: string }>;
+            count: number;
+          };
+          if (result.lists.length === 0) {
+            stdout(`No reminder lists (${result.generatedAt}).`);
+            return 0;
+          }
+          stdout([
+            `generatedAt: ${result.generatedAt}`,
+            `count: ${result.count}`,
+            ...result.lists.map((list) => `${list.name} | ${list.id}`),
+          ].join("\n"));
+          return 0;
+        }
+        if (method === "reminders.create" || method === "reminders.update") {
+          const result = response.result as {
+            id: string;
+            title: string;
+            listName: string;
+            dueAt: string | null;
+            tags: string[];
+            notesFull: string | null;
+          };
+          const lines = [
+            `id: ${result.id}`,
+            `title: ${result.title}`,
+            `list: ${result.listName}`,
+            `dueAt: ${result.dueAt ?? "none"}`,
+            `tags: ${result.tags.join(",") || "none"}`,
+          ];
+          if (result.notesFull) {
+            lines.push(`notes: ${result.notesFull}`);
+          }
           stdout(lines.join("\n"));
           return 0;
         }
@@ -565,30 +631,135 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
     if (action === "reminders") {
       const sub = args[0];
       const subArgs = args.slice(1);
-      if (sub !== "open") {
-        stderr("Usage: ambrogioctl mac reminders open [--limit N --include-no-due-date true|false --json]");
-        return 2;
+      if (sub === "lists") {
+        return await call("reminders.lists", undefined);
       }
-      const limitRaw = readFlag(subArgs, "--limit");
-      const includeNoDueDateRaw = readFlag(subArgs, "--include-no-due-date");
-      const payload: Record<string, unknown> = {};
-      if (limitRaw) {
-        const limit = Number(limitRaw);
-        if (Number.isNaN(limit) || !Number.isInteger(limit) || limit <= 0) {
-          stderr("--limit must be a positive integer.");
+      if (sub === "open") {
+        const limitRaw = readFlag(subArgs, "--limit");
+        const includeNoDueDateRaw = readFlag(subArgs, "--include-no-due-date");
+        const tagRaw = readFlag(subArgs, "--tag");
+        const listRaw = readFlag(subArgs, "--list");
+        const stateRaw = readFlag(subArgs, "--state");
+        const daysRaw = readFlag(subArgs, "--days");
+        const payload: Record<string, unknown> = {};
+        if (limitRaw) {
+          const limit = Number(limitRaw);
+          if (Number.isNaN(limit) || !Number.isInteger(limit) || limit <= 0) {
+            stderr("--limit must be a positive integer.");
+            return 2;
+          }
+          payload.limit = limit;
+        }
+        if (includeNoDueDateRaw !== null) {
+          const normalized = includeNoDueDateRaw.trim().toLowerCase();
+          if (!["true", "false"].includes(normalized)) {
+            stderr("--include-no-due-date must be true or false.");
+            return 2;
+          }
+          payload.includeNoDueDate = normalized === "true";
+        }
+        if (tagRaw) {
+          const normalized = normalizeReminderTag(tagRaw);
+          if (!normalized.startsWith("#")) {
+            stderr("--tag must be a tag value.");
+            return 2;
+          }
+          payload.tag = normalized;
+        }
+        if (listRaw) {
+          payload.listName = listRaw;
+        }
+        if (stateRaw) {
+          const normalized = stateRaw.trim().toLowerCase();
+          if (!["open", "completed"].includes(normalized)) {
+            stderr("--state must be open or completed.");
+            return 2;
+          }
+          payload.state = normalized;
+        }
+        if (daysRaw) {
+          const days = Number(daysRaw);
+          if (Number.isNaN(days) || !Number.isInteger(days) || days <= 0) {
+            stderr("--days must be a positive integer.");
+            return 2;
+          }
+          payload.days = days;
+        }
+        return await call("reminders.open", payload);
+      }
+      if (sub === "create") {
+        const listName = readFlag(subArgs, "--list");
+        const title = readFlag(subArgs, "--title");
+        const dueRaw = readFlag(subArgs, "--due");
+        const statusTagRaw = readFlag(subArgs, "--status-tag");
+        const areaTagRaw = readFlag(subArgs, "--area-tag");
+        const tagsRaw = readFlag(subArgs, "--tags");
+        const notes = readFlag(subArgs, "--notes");
+        if (!listName || !title) {
+          stderr("Usage: ambrogioctl mac reminders create --list <name> --title <title> [--due <ISO>] [--status-tag <tag>] [--area-tag <tag>] [--tags <csv>] [--notes <text>] [--json]");
           return 2;
         }
-        payload.limit = limit;
+        const payload: Record<string, unknown> = { listName, title };
+        if (dueRaw) {
+          const date = new Date(dueRaw);
+          if (Number.isNaN(date.getTime())) {
+            stderr("--due must be a valid ISO date string.");
+            return 2;
+          }
+          payload.dueAt = date.toISOString();
+        }
+        if (statusTagRaw) {
+          payload.statusTag = normalizeReminderTag(statusTagRaw);
+        }
+        if (areaTagRaw) {
+          payload.areaTag = normalizeReminderTag(areaTagRaw);
+        }
+        const parsedTags = parseReminderTagCsv(tagsRaw);
+        if (parsedTags) {
+          payload.otherTags = parsedTags;
+        }
+        if (notes !== null) {
+          payload.notes = notes;
+        }
+        return await call("reminders.create", payload);
       }
-      if (includeNoDueDateRaw !== null) {
-        const normalized = includeNoDueDateRaw.trim().toLowerCase();
-        if (!["true", "false"].includes(normalized)) {
-          stderr("--include-no-due-date must be true or false.");
+      if (sub === "update") {
+        const id = readFlag(subArgs, "--id");
+        const dueRaw = readFlag(subArgs, "--due");
+        const statusTagRaw = readFlag(subArgs, "--status-tag");
+        const areaTagRaw = readFlag(subArgs, "--area-tag");
+        const tagsRaw = readFlag(subArgs, "--tags");
+        if (!id) {
+          stderr("Usage: ambrogioctl mac reminders update --id <reminder-id> [--due <ISO>|none] [--status-tag <tag>|none] [--area-tag <tag>|none] [--tags <csv>] [--json]");
           return 2;
         }
-        payload.includeNoDueDate = normalized === "true";
+        const payload: Record<string, unknown> = { id };
+        if (dueRaw !== null) {
+          if (dueRaw === "none") {
+            payload.dueAt = null;
+          } else {
+            const date = new Date(dueRaw);
+            if (Number.isNaN(date.getTime())) {
+              stderr("--due must be a valid ISO date string or 'none'.");
+              return 2;
+            }
+            payload.dueAt = date.toISOString();
+          }
+        }
+        if (statusTagRaw !== null) {
+          payload.statusTag = statusTagRaw === "none" ? null : normalizeReminderTag(statusTagRaw);
+        }
+        if (areaTagRaw !== null) {
+          payload.areaTag = areaTagRaw === "none" ? null : normalizeReminderTag(areaTagRaw);
+        }
+        const parsedTags = parseReminderTagCsv(tagsRaw);
+        if (parsedTags) {
+          payload.otherTags = parsedTags;
+        }
+        return await call("reminders.update", payload);
       }
-      return await call("reminders.open", payload);
+      stderr("Usage: ambrogioctl mac reminders <lists|open|create|update> [options]");
+      return 2;
     }
 
     stderr(`Unknown mac action: ${action}`);

@@ -89,6 +89,10 @@ export type CalendarUpcomingResult = {
 export type RemindersOpenParams = {
   limit?: number;
   includeNoDueDate?: boolean;
+  tag?: string;
+  listName?: string;
+  state?: "open" | "completed";
+  days?: number;
 };
 
 export type ReminderItemDto = {
@@ -98,11 +102,16 @@ export type ReminderItemDto = {
   dueAt: string | null;
   dueAtEpochMs: number | null;
   dueInMinutes: number | null;
+  completedAt: string | null;
+  completedAtEpochMs: number | null;
   isOverdue: boolean;
   priority: number;
   isFlagged: boolean;
   tags: string[];
-  notesPreview?: string;
+  statusTag: "#next" | "#waiting" | "#someday" | "#tickler" | null;
+  areaTag: "#personal" | "#work" | "#home" | null;
+  otherTags: string[];
+  notesFull: string | null;
 };
 
 export type RemindersOpenResult = {
@@ -111,6 +120,37 @@ export type RemindersOpenResult = {
   timezone: string;
   items: ReminderItemDto[];
   count: number;
+};
+
+export type ReminderListDto = {
+  id: string;
+  name: string;
+};
+
+export type RemindersListsResult = {
+  generatedAt: string;
+  generatedAtEpochMs: number;
+  lists: ReminderListDto[];
+  count: number;
+};
+
+export type RemindersCreateParams = {
+  listName: string;
+  title: string;
+  dueAt?: string | null;
+  statusTag?: "#next" | "#waiting" | "#someday" | "#tickler" | null;
+  areaTag?: "#personal" | "#work" | "#home" | null;
+  otherTags?: string[];
+  notes?: string | null;
+};
+
+export type RemindersUpdateParams = {
+  id: string;
+  dueAt?: string | null;
+  statusTag?: "#next" | "#waiting" | "#someday" | "#tickler" | null;
+  areaTag?: "#personal" | "#work" | "#home" | null;
+  otherTags?: string[];
+  notesMode?: "preserve" | "replace_managed_tags";
 };
 
 export class MacToolsError extends Error {

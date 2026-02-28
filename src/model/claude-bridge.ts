@@ -144,6 +144,36 @@ export function extractClaudeToolCallActionsFromEvent(
   return actions;
 }
 
+export function extractLastClaudeAssistantText(events: unknown[]): string {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (!event || typeof event !== "object") {
+      continue;
+    }
+    const record = event as Record<string, unknown>;
+    if (record.type !== "assistant") {
+      continue;
+    }
+    const message = record.message;
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    const textParts = content
+      .filter((item): item is { type: string; text?: string } => Boolean(item) && typeof item === "object")
+      .filter((item) => item.type === "text" && typeof item.text === "string")
+      .map((item) => item.text?.trim() ?? "")
+      .filter((item) => item.length > 0);
+    if (textParts.length > 0) {
+      return textParts.join("\n\n");
+    }
+  }
+  return "";
+}
+
 export function splitJsonLines(input: string): {
   lines: string[];
   remaining: string;
@@ -502,6 +532,9 @@ export class ClaudeBridge implements ModelBridge {
 
       if (jsonResponse) {
         text = jsonResponse.result ?? "";
+        if (!text.trim()) {
+          text = extractLastClaudeAssistantText(stdoutResult.events);
+        }
 
         const executionDetails = extractClaudeExecutionDetails(jsonResponse);
         if (Object.keys(executionDetails).length > 0) {
