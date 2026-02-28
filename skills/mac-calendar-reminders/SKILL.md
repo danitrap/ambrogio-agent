@@ -70,6 +70,9 @@ ambrogioctl mac info --json
 5. For write requests:
 - discover valid lists first with `ambrogioctl mac reminders lists --json` unless the list name was already confirmed in the current context
 - create with explicit `--status-tag` and `--area-tag` when classification is clear
+- for updates requested via chat, first read the current reminder from JSON output (`ambrogioctl mac reminders open ... --json`) and identify its `id` before mutating anything
+- when the user does not explicitly ask to change or clear the due date, preserve the existing `dueAt`; never infer a missing `dueAt` from text-mode output
+- never build reminder updates from text-mode `ambrogioctl` output when JSON is available
 - update with `--status-tag none` or `--area-tag none` to clear managed GTD slots
 - use `--due none` to remove a due date
 6. If the user asks for raw output, return JSON exactly as provided by `--json`.

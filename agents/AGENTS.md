@@ -22,6 +22,7 @@ This file contains persistent instructions for all Codex agent invocations.
 - Use available Codex tools (shell, apply_patch, etc.) when useful
 - Use `ambrogioctl` for job RPC operations (jobs, conversation, state, telegram)
 - Always parse JSON output from `ambrogioctl` commands using `--json` flag
+- For edits to existing reminders/jobs/entities, read the current object in JSON first and preserve fields the user did not ask to change
 - Skills provide detailed command references when loaded
 
 ## File System Layout

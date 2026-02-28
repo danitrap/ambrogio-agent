@@ -56,6 +56,11 @@ describe("CalendarProvider", () => {
     expect(result.events[0]).toMatchObject({
       startAtEpochMs: Date.parse("2026-02-23T12:00:00.000Z"),
       endAtEpochMs: Date.parse("2026-02-23T12:30:00.000Z"),
+      startWeekday: "lunedì",
+      startLocalDate: "2026-02-23",
+      startLocalTime: "13:00",
+      endLocalDate: "2026-02-23",
+      endLocalTime: "13:30",
       startInMinutes: 120,
       endInMinutes: 150,
       isStarted: false,
@@ -115,6 +120,31 @@ describe("CalendarProvider", () => {
       isStarted: true,
       isEnded: true,
       isOngoing: false,
+    });
+  });
+
+  test("computes weekday and local date from requested timezone instead of UTC", async () => {
+    const provider = new CalendarProvider({
+      now: () => new Date("2026-02-23T10:00:00.000Z"),
+      fetchCalendarEvents: async () => [
+        {
+          id: "boundary",
+          calendarName: "Travel",
+          title: "Late flight",
+          startAt: "2026-02-23T23:30:00.000Z",
+          endAt: "2026-02-24T01:00:00.000Z",
+          allDay: false,
+        },
+      ],
+    });
+
+    const result = await provider.getUpcoming({ days: 2, limit: 10, timezone: "Europe/Rome" });
+    expect(result.events[0]).toMatchObject({
+      startWeekday: "martedì",
+      startLocalDate: "2026-02-24",
+      startLocalTime: "00:30",
+      endLocalDate: "2026-02-24",
+      endLocalTime: "02:00",
     });
   });
 });
@@ -313,5 +343,36 @@ describe("RemindersProvider", () => {
       areaTag: "#home",
       otherTags: ["#smoke"],
     });
+  });
+
+  test("update preserves the existing due date when no new dueAt is provided", async () => {
+    const createCalls: Array<{ listName: string; title: string; dueAt: string | null; notes: string | null }> = [];
+    const provider = new RemindersProvider({
+      now: () => new Date("2026-02-23T10:00:00.000Z"),
+      fetchOpenReminders: async () => [{
+        id: "old-id",
+        listName: "Inbox",
+        title: "Replace me",
+        dueAt: "2026-02-24T08:00:00.000Z",
+        priority: 0,
+        isFlagged: false,
+        notes: "context",
+      }],
+      createReminder: async (params) => {
+        createCalls.push(params);
+        return "new-id";
+      },
+      deleteReminder: async () => {},
+    });
+
+    const updated = await provider.update({ id: "old-id", statusTag: "#waiting" });
+
+    expect(createCalls).toEqual([{
+      listName: "Inbox",
+      title: "Replace me",
+      dueAt: "2026-02-24T08:00:00.000Z",
+      notes: "context\n\nambrogio-tags: #waiting",
+    }]);
+    expect(updated.dueAt).toBe("2026-02-24T08:00:00.000Z");
   });
 });
