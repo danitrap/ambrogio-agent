@@ -64,6 +64,18 @@ describe("mac-tools-service routing", () => {
     expect(calendarResult).toMatchObject({
       generatedAtEpochMs: Date.parse("2026-02-23T10:00:00.000Z"),
     });
+    expect(calendarResult).toMatchObject({
+      events: [
+        {
+          id: "evt-1",
+          startWeekday: "martedì",
+          startLocalDate: "2026-02-24",
+          startLocalTime: "11:00",
+          endLocalDate: "2026-02-24",
+          endLocalTime: "12:00",
+        },
+      ],
+    });
 
     const reminders = await handleMacToolsRpcRequest({
       request: { method: "reminders.open", id: 4, params: { limit: 10 } },

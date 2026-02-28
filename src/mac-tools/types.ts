@@ -63,6 +63,11 @@ export type CalendarEventDto = {
   title: string;
   startAt: string;
   endAt: string;
+  startLocalDate: string;
+  startLocalTime: string;
+  startWeekday: string;
+  endLocalDate: string;
+  endLocalTime: string;
   startAtEpochMs: number;
   endAtEpochMs: number;
   startInMinutes: number;

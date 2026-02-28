@@ -423,6 +423,11 @@ describe("ambrogioctl", () => {
               isEnded: false,
               isOngoing: false,
               calendarName: "Work",
+              startWeekday: "domenica",
+              startLocalDate: "2026-02-23",
+              startLocalTime: "11:30",
+              endLocalDate: "2026-02-23",
+              endLocalTime: "12:30",
               allDay: false,
             },
             {
@@ -438,6 +443,11 @@ describe("ambrogioctl", () => {
               isEnded: false,
               isOngoing: true,
               calendarName: "Work",
+              startWeekday: "domenica",
+              startLocalDate: "2026-02-23",
+              startLocalTime: "10:45",
+              endLocalDate: "2026-02-23",
+              endLocalTime: "11:15",
               allDay: false,
             },
           ],
@@ -449,8 +459,52 @@ describe("ambrogioctl", () => {
     });
 
     expect(code).toBe(0);
+    expect(out.join("\n")).toContain("domenica 2026-02-23 11:30 | Future | Work | starts in 30m");
+    expect(out.join("\n")).toContain("domenica 2026-02-23 10:45 | Live | Work | ongoing");
     expect(out.join("\n")).toContain("starts in 30m");
     expect(out.join("\n")).toContain("ongoing");
+  });
+
+  test("mac calendar upcoming falls back to ISO startAt when local weekday fields are absent", async () => {
+    const out: string[] = [];
+    const code = await runAmbrogioCtl(["mac", "calendar", "upcoming", "--days", "1"], {
+      socketPath: "/tmp/ambrogio.sock",
+      sendMacRpc: async () => ({
+        jsonrpc: "2.0",
+        id: "1",
+        result: {
+          generatedAtEpochMs: Date.parse("2026-02-23T10:00:00.000Z"),
+          window: {
+            from: "2026-02-23T10:00:00.000Z",
+            to: "2026-02-24T10:00:00.000Z",
+            timezone: "Europe/Rome",
+          },
+          events: [
+            {
+              id: "e1",
+              title: "Future",
+              startAt: "2026-02-23T10:30:00.000Z",
+              endAt: "2026-02-23T11:30:00.000Z",
+              startAtEpochMs: Date.parse("2026-02-23T10:30:00.000Z"),
+              endAtEpochMs: Date.parse("2026-02-23T11:30:00.000Z"),
+              startInMinutes: 30,
+              endInMinutes: 90,
+              isStarted: false,
+              isEnded: false,
+              isOngoing: false,
+              calendarName: "Work",
+              allDay: false,
+            },
+          ],
+          count: 1,
+        },
+      }),
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(out.join("\n")).toContain("2026-02-23T10:30:00.000Z | Future | Work | starts in 30m");
   });
 
   test("jobs create resolves user/chat from TELEGRAM_ALLOWED_USER_ID", async () => {

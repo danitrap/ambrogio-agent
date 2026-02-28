@@ -146,6 +146,18 @@ function formatCalendarStatus(event: {
   return "unknown";
 }
 
+function formatCalendarDisplayStart(event: {
+  startAt: string;
+  startWeekday?: string;
+  startLocalDate?: string;
+  startLocalTime?: string;
+}): string {
+  if (event.startWeekday && event.startLocalDate && event.startLocalTime) {
+    return `${event.startWeekday} ${event.startLocalDate} ${event.startLocalTime}`;
+  }
+  return event.startAt;
+}
+
 function normalizeReminderTag(value: string): string {
   const trimmed = value.trim().toLowerCase();
   if (!trimmed) {
@@ -472,6 +484,9 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
               startAt: string;
               endAt: string;
               calendarName: string;
+              startWeekday?: string;
+              startLocalDate?: string;
+              startLocalTime?: string;
               startInMinutes?: number;
               isOngoing?: boolean;
               isEnded?: boolean;
@@ -487,7 +502,7 @@ export async function runAmbrogioCtl(argv: string[], deps: RunDeps): Promise<num
             `count: ${result.count}`,
             ...result.events.map((event) => {
               const status = formatCalendarStatus(event);
-              return `${event.startAt} | ${event.title} | ${event.calendarName} | ${status}`;
+              return `${formatCalendarDisplayStart(event)} | ${event.title} | ${event.calendarName} | ${status}`;
             }),
           ];
           stdout(lines.join("\n"));

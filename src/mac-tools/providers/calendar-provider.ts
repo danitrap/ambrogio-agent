@@ -81,7 +81,39 @@ function normalizeNotesPreview(value: string | undefined): string | undefined {
   return `${normalized.slice(0, NOTES_PREVIEW_MAX - 3)}...`;
 }
 
-function mapCalendarEvent(event: NativeCalendarEvent, nowEpochMs: number): CalendarEventDto | null {
+function formatLocalCalendarParts(input: Date, timezone: string): {
+  date: string;
+  time: string;
+  weekday: string;
+} {
+  const formatter = new Intl.DateTimeFormat("it-IT", {
+    timeZone: timezone,
+    weekday: "long",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const byType = new Map(formatter.formatToParts(input).map((part) => [part.type, part.value]));
+  const year = byType.get("year");
+  const month = byType.get("month");
+  const day = byType.get("day");
+  const hour = byType.get("hour");
+  const minute = byType.get("minute");
+  const weekday = byType.get("weekday");
+  if (!year || !month || !day || !hour || !minute || !weekday) {
+    throw new MacToolsError("internal_error", `Unable to format calendar event in timezone ${timezone}.`);
+  }
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hour}:${minute}`,
+    weekday,
+  };
+}
+
+function mapCalendarEvent(event: NativeCalendarEvent, nowEpochMs: number, timezone: string): CalendarEventDto | null {
   const startAtDate = new Date(event.startAt);
   const endAtDate = new Date(event.endAt);
   const startAtEpochMs = startAtDate.getTime();
@@ -91,6 +123,8 @@ function mapCalendarEvent(event: NativeCalendarEvent, nowEpochMs: number): Calen
   }
   const isStarted = startAtEpochMs <= nowEpochMs;
   const isEnded = endAtEpochMs < nowEpochMs;
+  const startLocal = formatLocalCalendarParts(startAtDate, timezone);
+  const endLocal = formatLocalCalendarParts(endAtDate, timezone);
 
   return {
     id: String(event.id),
@@ -98,6 +132,11 @@ function mapCalendarEvent(event: NativeCalendarEvent, nowEpochMs: number): Calen
     title: String(event.title || "(untitled)"),
     startAt: new Date(startAtEpochMs).toISOString(),
     endAt: new Date(endAtEpochMs).toISOString(),
+    startLocalDate: startLocal.date,
+    startLocalTime: startLocal.time,
+    startWeekday: startLocal.weekday,
+    endLocalDate: endLocal.date,
+    endLocalTime: endLocal.time,
     startAtEpochMs,
     endAtEpochMs,
     startInMinutes: Math.trunc((startAtEpochMs - nowEpochMs) / 60_000),
@@ -238,7 +277,7 @@ export class CalendarProvider {
     try {
       const native = await withTimeout(this.fetchCalendarEvents({ from, to, timezone, limit }), this.timeoutMs);
       const mapped = native
-        .map((event) => mapCalendarEvent(event, generatedAtEpochMs))
+        .map((event) => mapCalendarEvent(event, generatedAtEpochMs, timezone))
         .filter((event): event is CalendarEventDto => event !== null)
         .sort((a, b) => a.startAtEpochMs - b.startAtEpochMs)
         .slice(0, limit);
