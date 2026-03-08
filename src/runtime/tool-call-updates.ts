@@ -59,3 +59,24 @@ export function createToolCallTelegramNotifier(params: {
     }
   };
 }
+
+export function createSuppressibleToolCallEventForwarder(
+  delegate?: (event: ModelToolCallEvent) => Promise<void> | void,
+): {
+  notify: (event: ModelToolCallEvent) => Promise<void>;
+  suppress: () => void;
+} {
+  let suppressed = false;
+
+  return {
+    notify: async (event: ModelToolCallEvent): Promise<void> => {
+      if (suppressed) {
+        return;
+      }
+      await delegate?.(event);
+    },
+    suppress: (): void => {
+      suppressed = true;
+    },
+  };
+}

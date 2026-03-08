@@ -178,8 +178,32 @@ describe("AmbrogioAgentService", () => {
     });
 
     const callback = () => {};
-    await service.handleMessage(1, "ciao", "req-1", undefined, callback);
+    await service.handleMessage(1, "ciao", "req-1", { onToolCallEvent: callback });
 
     expect(seenEventCallback).toBe(callback);
+  });
+
+  test("drops onToolCallEvent when suppressToolCallUpdates is true", async () => {
+    let seenEventCallback: ((event: ModelToolCallEvent) => Promise<void> | void) | undefined;
+    const model: ModelBridge = {
+      respond: async (request) => {
+        seenEventCallback = request.onToolCallEvent;
+        return { text: "ok" };
+      },
+    };
+
+    const service = new AmbrogioAgentService({
+      allowlist: new TelegramAllowlist(1),
+      modelBridge: model,
+      logger: new Logger("error"),
+    });
+
+    const callback = () => {};
+    await service.handleMessage(1, "ciao", "req-1", {
+      onToolCallEvent: callback,
+      suppressToolCallUpdates: true,
+    });
+
+    expect(seenEventCallback).toBeUndefined();
   });
 });

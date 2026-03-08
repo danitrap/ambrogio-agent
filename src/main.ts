@@ -2,7 +2,7 @@ import { mkdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { AttachmentService, type ProcessedAttachment } from "./attachments/attachment-service";
 import { TelegramAllowlist } from "./auth/allowlist";
-import { AmbrogioAgentService } from "./app/ambrogio-agent-service";
+import { AmbrogioAgentService, type HandleMessageOptions } from "./app/ambrogio-agent-service";
 import { loadConfig } from "./config/env";
 import { Logger } from "./logging/audit";
 import { correlationFields } from "./logging/correlation";
@@ -28,7 +28,7 @@ import { startMacToolsLifecycle } from "./runtime/mac-tools-lifecycle";
 import { createTelegramInputBuffer, type BufferedTelegramInput } from "./runtime/telegram-input-buffer";
 import { startTelegramUpdateLoop } from "./runtime/telegram-update-loop";
 import { parseOpenTodoItems } from "./runtime/todo-snapshot";
-import { createToolCallTelegramNotifier } from "./runtime/tool-call-updates";
+import { createSuppressibleToolCallEventForwarder, createToolCallTelegramNotifier } from "./runtime/tool-call-updates";
 import { bootstrapProjectSkills } from "./skills/bootstrap";
 import { SkillDiscovery } from "./skills/discovery";
 import { bootstrapAgentsFile } from "./agents/bootstrap";
@@ -557,8 +557,7 @@ async function main(): Promise<void> {
         job.userId,
         prefixedPrompt,
         `delayed-${job.taskId}`,
-        undefined,
-        notifyToolCallUpdate,
+        { suppressToolCallUpdates: true },
       );
 
       const disableImplicitDelivery = shouldDisableImplicitScheduledDelivery(job.kind, job.recurrenceType);
@@ -893,15 +892,23 @@ async function main(): Promise<void> {
     update: Pick<TelegramMessage, "updateId" | "userId" | "chatId">;
     commandName?: string;
     requestPreview: string;
-    operation: (signal: AbortSignal) => Promise<string>;
+    operation: (args: {
+      signal: AbortSignal;
+      onToolCallEvent?: HandleMessageOptions["onToolCallEvent"];
+    }) => Promise<string>;
   }): Promise<{ reply: string; ok: boolean }> => {
+    const toolCallForwarder = createSuppressibleToolCallEventForwarder(notifyToolCallUpdate);
     const tracked = startOperationWithTyping({
       telegram,
       logger,
       chatId: params.update.chatId,
       updateId: params.update.updateId,
       userId: params.update.userId,
-      operation: params.operation,
+      operation: (signal) =>
+        params.operation({
+          signal,
+          onToolCallEvent: toolCallForwarder.notify,
+        }),
     });
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -938,6 +945,7 @@ async function main(): Promise<void> {
     }
 
     await tracked.stopTyping();
+    toolCallForwarder.suppress();
     const jobId = `bg-${params.update.updateId}-${Date.now()}`;
     logger.error("request_timed_out", {
       ...correlationFields({
@@ -1024,7 +1032,7 @@ async function main(): Promise<void> {
     const result = await runOperationWithSoftTimeout({
       update: updateContext,
       requestPreview: promptText ?? (input.voiceItems.length > 0 ? "voice message" : "attachment workflow"),
-      operation: async (signal) => {
+      operation: async ({ signal, onToolCallEvent }) => {
         const processedAttachments: ProcessedAttachment[] = [];
         for (let index = 0; index < input.attachments.length; index += 1) {
           const attachment = input.attachments[index];
@@ -1106,8 +1114,10 @@ async function main(): Promise<void> {
           input.userId,
           promptText,
           String(input.lastUpdateId),
-          signal,
-          notifyToolCallUpdate,
+          {
+            signal,
+            onToolCallEvent,
+          },
         );
         lastPromptByUser.set(input.userId, promptText);
         return modelReply;
@@ -1200,12 +1210,14 @@ async function main(): Promise<void> {
           update,
           commandName,
           requestPreview: prompt,
-          operation: (signal) => ambrogioAgent.handleMessage(
+          operation: ({ signal, onToolCallEvent }) => ambrogioAgent.handleMessage(
             update.userId,
             prompt,
             String(update.updateId),
-            signal,
-            notifyToolCallUpdate,
+            {
+              signal,
+              onToolCallEvent,
+            },
           ),
         });
         if (result.ok) {

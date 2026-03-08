@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelToolCallEvent } from "../src/model/types";
-import { createToolCallTelegramNotifier, formatToolCallUpdateMessage } from "../src/runtime/tool-call-updates";
+import {
+  createSuppressibleToolCallEventForwarder,
+  createToolCallTelegramNotifier,
+  formatToolCallUpdateMessage,
+} from "../src/runtime/tool-call-updates";
 
 class FakeTelegram {
   public calls: Array<{ chatId: number; text: string; parseMode?: "HTML" }> = [];
@@ -125,5 +129,31 @@ describe("createToolCallTelegramNotifier", () => {
 
     expect(text).toContain("tool[claude] Read:");
     expect(text).toContain("/data/groceries.md");
+  });
+});
+
+describe("createSuppressibleToolCallEventForwarder", () => {
+  test("forwards events until suppressed", async () => {
+    const seen: ModelToolCallEvent[] = [];
+    const forwarder = createSuppressibleToolCallEventForwarder(async (event) => {
+      seen.push(event);
+    });
+
+    await forwarder.notify(sampleEvent);
+    forwarder.suppress();
+    await forwarder.notify({
+      ...sampleEvent,
+      detail: "should stay hidden",
+    });
+
+    expect(seen).toEqual([sampleEvent]);
+  });
+
+  test("stays no-op when no delegate is configured", async () => {
+    const forwarder = createSuppressibleToolCallEventForwarder();
+
+    await expect(forwarder.notify(sampleEvent)).resolves.toBeUndefined();
+    forwarder.suppress();
+    await expect(forwarder.notify(sampleEvent)).resolves.toBeUndefined();
   });
 });

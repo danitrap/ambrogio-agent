@@ -18,6 +18,12 @@ export type AmbrogioAgentDependencies = {
   memoryStore?: MemoryStore;
 };
 
+export type HandleMessageOptions = {
+  signal?: AbortSignal;
+  onToolCallEvent?: (event: ModelToolCallEvent) => Promise<void> | void;
+  suppressToolCallUpdates?: boolean;
+};
+
 export class AmbrogioAgentService {
   private readonly historyByUser = new Map<number, Array<{ role: "user" | "assistant"; text: string }>>();
 
@@ -27,8 +33,7 @@ export class AmbrogioAgentService {
     userId: number,
     text: string,
     requestId?: string,
-    signal?: AbortSignal,
-    onToolCallEvent?: (event: ModelToolCallEvent) => Promise<void> | void,
+    options?: HandleMessageOptions,
   ): Promise<string> {
     if (!this.deps.allowlist.isAllowed(userId)) {
       this.deps.logger.warn("unauthorized_user", { userId });
@@ -53,8 +58,8 @@ export class AmbrogioAgentService {
     const modelResponse = await this.deps.modelBridge.respond({
       requestId,
       message: contextualMessage,
-      signal,
-      onToolCallEvent,
+      signal: options?.signal,
+      onToolCallEvent: options?.suppressToolCallUpdates ? undefined : options?.onToolCallEvent,
     });
     const responseText = modelResponse.text || "Done.";
 
