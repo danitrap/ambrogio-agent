@@ -13,7 +13,7 @@ function compactDetail(value: string, max = 260): string {
 
 export function formatToolCallUpdateMessage(event: ModelToolCallEvent): string {
   const suffix = event.phase === "final_summary" ? " (summary)" : "";
-  if (event.type === "claude_tool_call") {
+  if (event.type === "tool_call") {
     const toolName = event.toolName?.trim() || "tool";
     return `🔧 tool[${event.backend}] ${toolName}: ${compactDetail(event.detail)}${suffix}`;
   }

@@ -28,7 +28,7 @@ export type ModelExecutionSummary = {
 
 export type ModelToolCallEvent = {
   backend: "codex" | "claude";
-  type: "shell_exec" | "web_search" | "web_fetch" | "claude_tool_call";
+  type: "shell_exec" | "web_search" | "web_fetch" | "tool_call";
   detail: string;
   phase: "realtime" | "final_summary";
   toolName?: string;

@@ -466,7 +466,7 @@ export class ClaudeBridge implements ModelBridge {
           await emitToolCallEvent(
             {
               backend: "claude",
-              type: "claude_tool_call",
+              type: "tool_call",
               toolName: action.toolName,
               detail: action.detail,
               phase: "realtime",
@@ -581,7 +581,7 @@ export class ClaudeBridge implements ModelBridge {
           await emitToolCallEvent(
             {
               backend: "claude",
-              type: "claude_tool_call",
+              type: "tool_call",
               toolName: action.toolName,
               detail: action.detail,
               phase: "realtime",

@@ -120,7 +120,7 @@ describe("createToolCallTelegramNotifier", () => {
   test("formats claude tool call with tool name", () => {
     const text = formatToolCallUpdateMessage({
       backend: "claude",
-      type: "claude_tool_call",
+      type: "tool_call",
       toolName: "Read",
       detail: "/data/groceries.md",
       phase: "realtime",

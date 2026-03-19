@@ -14,6 +14,21 @@ type CodexAuditAction = {
   detail: string;
 };
 
+type CodexToolCallAction = {
+  toolCallId?: string;
+  toolName: string;
+  detail: string;
+};
+
+type CodexTurnCompletedEvent = {
+  type: "turn.completed";
+  usage?: {
+    input_tokens?: number;
+    cached_input_tokens?: number;
+    output_tokens?: number;
+  };
+};
+
 function previewLogText(value: string, max = 240): string {
   const normalized = value.replaceAll(/\s+/g, " ").trim();
   if (normalized.length <= max) {
@@ -34,6 +49,110 @@ function compactDetail(value: string, max = 220): string {
     return normalized;
   }
   return `${normalized.slice(0, max)}...`;
+}
+
+export function splitCodexJsonLines(input: string): {
+  lines: string[];
+  remaining: string;
+} {
+  if (input.length === 0) {
+    return { lines: [], remaining: "" };
+  }
+  const normalized = input.replaceAll("\r\n", "\n");
+  const parts = normalized.split("\n");
+  const remaining = parts.pop() ?? "";
+  const lines = parts.map((line) => line.trim()).filter((line) => line.length > 0);
+  return { lines, remaining };
+}
+
+function summarizeCodexToolDetail(item: Record<string, unknown>): string {
+  const command = typeof item.command === "string" ? item.command.trim() : "";
+  if (command) {
+    return compactDetail(command);
+  }
+  const query = typeof item.query === "string" ? item.query.trim() : "";
+  if (query) {
+    return compactDetail(`query=${query}`);
+  }
+  const action = item.action;
+  if (action && typeof action === "object") {
+    const actionQuery = typeof (action as { query?: unknown }).query === "string"
+      ? ((action as { query?: string }).query ?? "").trim()
+      : "";
+    if (actionQuery) {
+      return compactDetail(`query=${actionQuery}`);
+    }
+  }
+  return "no input";
+}
+
+export function extractCodexToolCallActionsFromEvent(event: unknown): CodexToolCallAction[] {
+  if (!event || typeof event !== "object") {
+    return [];
+  }
+  const record = event as Record<string, unknown>;
+  const item = record.item;
+  if (!item || typeof item !== "object") {
+    return [];
+  }
+
+  const itemRecord = item as Record<string, unknown>;
+  const itemType = typeof itemRecord.type === "string" ? itemRecord.type.trim() : "";
+  const itemId = typeof itemRecord.id === "string" ? itemRecord.id : undefined;
+  if (itemType === "command_execution") {
+    return [{
+      toolCallId: itemId,
+      toolName: "Shell",
+      detail: summarizeCodexToolDetail(itemRecord),
+    }];
+  }
+  if (itemType === "web_search") {
+    return [{
+      toolCallId: itemId,
+      toolName: "WebSearch",
+      detail: summarizeCodexToolDetail(itemRecord),
+    }];
+  }
+  return [];
+}
+
+export function extractLastCodexAssistantText(events: unknown[]): string {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (!event || typeof event !== "object") {
+      continue;
+    }
+    const item = (event as { item?: unknown }).item;
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const itemRecord = item as Record<string, unknown>;
+    if (itemRecord.type !== "agent_message") {
+      continue;
+    }
+    const text = typeof itemRecord.text === "string" ? itemRecord.text.trim() : "";
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
+export function extractCodexExecutionDetails(
+  event: CodexTurnCompletedEvent,
+): Record<string, unknown> {
+  const usage = event.usage;
+  if (!usage) {
+    return {};
+  }
+
+  return {
+    usage: {
+      inputTokens: usage.input_tokens ?? 0,
+      outputTokens: usage.output_tokens ?? 0,
+      cacheReadTokens: usage.cached_input_tokens ?? 0,
+    },
+  };
 }
 
 export function extractCodexAuditActionFromLine(line: string): CodexAuditAction | null {
@@ -134,6 +253,66 @@ async function readCodexStderrStream(params: {
   return text;
 }
 
+async function readCodexStdoutStream(params: {
+  stream: ReadableStream;
+  onEventObject?: (event: unknown) => Promise<void> | void;
+}): Promise<{ stdout: string; realtimeParseFailed: boolean; events: unknown[] }> {
+  const reader = params.stream.getReader();
+  const decoder = new TextDecoder();
+  let stdout = "";
+  let pending = "";
+  let realtimeParseFailed = false;
+  const events: unknown[] = [];
+
+  const processBuffer = async (): Promise<void> => {
+    const split = splitCodexJsonLines(pending);
+    pending = split.remaining;
+    for (const rawLine of split.lines) {
+      try {
+        const parsed = JSON.parse(rawLine) as unknown;
+        events.push(parsed);
+        await params.onEventObject?.(parsed);
+      } catch {
+        realtimeParseFailed = true;
+      }
+    }
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      const chunk = decoder.decode(value, { stream: true });
+      stdout += chunk;
+      pending += chunk;
+      await processBuffer();
+    }
+    const tail = decoder.decode();
+    if (tail) {
+      stdout += tail;
+      pending += tail;
+      await processBuffer();
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const tail = pending.trim();
+  if (tail.length > 0) {
+    try {
+      const parsed = JSON.parse(tail) as unknown;
+      events.push(parsed);
+      await params.onEventObject?.(parsed);
+    } catch {
+      realtimeParseFailed = true;
+    }
+  }
+
+  return { stdout, realtimeParseFailed, events };
+}
+
 export class CodexBridge implements ModelBridge {
   private readonly cwd?: string;
   private readonly rootDir: string;
@@ -162,6 +341,7 @@ export class CodexBridge implements ModelBridge {
     const execArgs = [
       "exec",
       "--skip-git-repo-check",
+      "--json",
       "--output-last-message",
       outputPath,
       "--cd",
@@ -258,14 +438,63 @@ export class CodexBridge implements ModelBridge {
         }
       },
     });
-    const stdoutPromise = new Response(stdoutStream).text();
+    const emittedToolUseIds = new Set<string>();
+    let lastToolCallKey: string | null = null;
+    const emitToolCallEvent = async (event: ModelToolCallEvent, toolUseId?: string): Promise<void> => {
+      const dedupKey = `${event.type}:${event.toolName ?? ""}:${event.detail}`;
+      if (lastToolCallKey === dedupKey) {
+        return;
+      }
+      if (toolUseId && emittedToolUseIds.has(toolUseId)) {
+        return;
+      }
+      if (toolUseId) {
+        emittedToolUseIds.add(toolUseId);
+      }
+      lastToolCallKey = dedupKey;
+      try {
+        await request.onToolCallEvent?.(event);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn("codex_tool_call_event_emit_failed", {
+          ...correlationFields({ requestId }),
+          command: execCommand,
+          type: event.type,
+          toolName: event.toolName,
+          phase: event.phase,
+          source: event.source,
+          message,
+        });
+      }
+    };
+
+    const stdoutPromise = readCodexStdoutStream({
+      stream: stdoutStream,
+      onEventObject: async (streamEvent) => {
+        const actions = extractCodexToolCallActionsFromEvent(streamEvent);
+        for (const action of actions) {
+          await emitToolCallEvent(
+            {
+              backend: "codex",
+              type: "tool_call",
+              toolName: action.toolName,
+              detail: action.detail,
+              phase: "realtime",
+              source: "tool_use",
+            },
+            action.toolCallId,
+          );
+        }
+      },
+    });
 
     try {
       stdinSink.write(prompt);
       stdinSink.end();
       const exitCode = await process.exited;
       const stderr = (await stderrPromise).trim();
-      const stdout = (await stdoutPromise).trim();
+      const stdoutResult = await stdoutPromise;
+      const stdout = stdoutResult.stdout.trim();
 
       this.logger.info("codex_exec_streams", {
         ...correlationFields({ requestId }),
@@ -285,6 +514,24 @@ export class CodexBridge implements ModelBridge {
           auditActionCount: auditActions.length,
           auditActions: auditActions.slice(0, 20),
         });
+      }
+
+      const turnCompletedEvent = stdoutResult.events.findLast((item) => {
+        if (!item || typeof item !== "object") {
+          return false;
+        }
+        return (item as { type?: string }).type === "turn.completed";
+      }) as CodexTurnCompletedEvent | undefined;
+      if (turnCompletedEvent) {
+        const executionDetails = extractCodexExecutionDetails(turnCompletedEvent);
+        if (Object.keys(executionDetails).length > 0) {
+          this.logger.info("codex_exec_details", {
+            ...correlationFields({ requestId }),
+            command: execCommand,
+            exitCode,
+            ...executionDetails,
+          });
+        }
       }
 
       let text = "";
@@ -307,6 +554,10 @@ export class CodexBridge implements ModelBridge {
           exitCode,
           stderr,
         });
+      }
+
+      if (!text) {
+        text = extractLastCodexAssistantText(stdoutResult.events);
       }
 
       if (!text && stdout) {
@@ -374,7 +625,7 @@ export class CodexBridge implements ModelBridge {
       return { text: responseText };
     } catch (error) {
       const stderr = (await stderrPromise).trim();
-      const stdout = (await stdoutPromise).trim();
+      const stdout = (await stdoutPromise).stdout.trim();
       const durationMs = Date.now() - startedAt;
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error("codex_exec_streams_error", {
