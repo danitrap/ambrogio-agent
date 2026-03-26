@@ -157,6 +157,10 @@ function toIsoOrNull(value: string | null | undefined): string | null {
   if (!value) {
     return null;
   }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const dateOnly = new Date(`${value}T23:59:59.999`);
+    return Number.isFinite(dateOnly.getTime()) ? dateOnly.toISOString() : null;
+  }
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }

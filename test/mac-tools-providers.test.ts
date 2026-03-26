@@ -262,6 +262,29 @@ describe("RemindersProvider", () => {
     });
   });
 
+  test("does not mark date-only reminders as overdue before the local day ends", async () => {
+    const provider = new RemindersProvider({
+      now: () => new Date("2026-03-26T10:00:00.000Z"),
+      fetchOpenReminders: async () => [
+        {
+          id: "date-only",
+          listName: "Inbox",
+          title: "Pay bill",
+          dueAt: "2026-03-26",
+          priority: 1,
+          isFlagged: false,
+        },
+      ],
+    });
+
+    const result = await provider.getOpen({ includeNoDueDate: true, limit: 10 });
+    expect(result.items[0]).toMatchObject({
+      dueAt: "2026-03-26T22:59:59.999Z",
+      isOverdue: false,
+    });
+    expect(result.items[0]?.dueInMinutes).toBeGreaterThan(0);
+  });
+
   test("validates params and maps permission errors", async () => {
     const provider = new RemindersProvider({
       fetchOpenReminders: async () => {
